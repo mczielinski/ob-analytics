@@ -65,6 +65,10 @@ complete capture on its own, so it replays alone:
 | `seg-NNNN/meta.json` | Segment metadata, the capture record: start/end, counts, per-capturer diagnostics, the source and what it declares about its feed, and the instrument's `tick_size` and `lot_size`. When the venue does not give a step, the capture starts from 0.01 and `1e-8` and makes each step finer until every price and size written fits. With `raw.jsonl` on, `raw_text_types` names the types written as text and `n_raw_frames_skipped` counts the skipped frames. `n_raw_frames` counts every frame, skipped ones included, so `raw.jsonl` has `n_raw_frames - n_raw_frames_skipped` lines. The capture logs a warning the first time each happens |
 
 `process` and `audit` given the capture directory work through each segment.
+They need no `--source`: the capture records the source that reads it back
+(`replay_source`, in `meta.json` and `manifest.json`), such as `depth_csv` for
+a ccxt capture. A capture made by an older version records none and is read
+by the source for its level, or by `bitstamp` when it records no level either.
 `process` writes each segment's results to the folder of the same name under
 `--output` and copies `manifest.json` there. To read one segment in Python,
 pass its book file: `Pipeline().run("/tmp/cap/seg-0001/orders.csv")`.
@@ -210,6 +214,7 @@ reboot.
 |-------|---------|
 | `source`, `pair`, `level` | What was captured. A restart must match them |
 | `feed_type`, `trade_attribution`, `sequence_kind` | What the source declares about its feed |
+| `replay_source` | The offline source that reads the capture back. `process` and `audit` use it when `--source` is not given |
 | `version` | The layout version (currently `1`) |
 | `started`, `ended` | When the capture started, and when it last stopped |
 | `restarts` | How many times the capture was started again in this directory |

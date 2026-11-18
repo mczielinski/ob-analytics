@@ -41,7 +41,7 @@ in one of two ways, and replays either through the [L2 path](l2-depth.md):
 pip install "ob-analytics[ccxt]"
 
 ob-analytics capture ccxt --venue kalshi --pair KXPRESNOMD-28-MK --minutes 10 -o /tmp/kalshi
-ob-analytics process /tmp/kalshi --source depth_csv --gallery --output /tmp/kalshi_out
+ob-analytics process /tmp/kalshi --gallery --output /tmp/kalshi_out
 ```
 
 ## Find a market ticker
@@ -109,11 +109,18 @@ the tick size in use is coarser than the prices in the file, the loader raises
 
 ## Depth bins
 
-The depth summary adds up the size resting in rings around the mid-price. Each
-ring is `depth_bps` basis points wide: 25 by default, 20 rings a side. That
-suits a price of 100,000, but not a price of 0.04, where 25 basis points is
-0.0001, a tenth of the smallest tick. Most rings are then empty. Use wider
-rings for a prediction market:
+The depth summary adds up the size resting in rings outward from the best bid
+and the best ask. Each ring is `depth_bps` basis points wide: 25 by default, 20
+rings a side. That suits a price of 100,000, but not a price of 0.04, where 25
+basis points is 0.0001, a tenth of the smallest tick.
+
+All the rings together cover `depth_bps × depth_bins` basis points of the best
+price, 500 by default, counted in whole ticks. At a price of 0.04 with a tick
+of 0.001, 5% of 40 ticks is 2 ticks. When this window holds fewer ticks than
+there are rings, the rings share out the few ticks it has and the rest stay at
+zero. No ring is ever negative, and the rings of a side add up to the size
+inside the window. Size further from the best price than the window is not
+counted at all. Use wider rings for a prediction market:
 
 ```python
 from ob_analytics import PipelineConfig
@@ -211,8 +218,8 @@ export KALSHI_API_KEY_ID=<your key id>
 export KALSHI_PRIVATE_KEY_PATH=~/.config/kalshi/private-key.pem
 
 ob-analytics capture kalshi --pair KXPRESNOMD-28-MK --minutes 10 -o /tmp/kalshi_ws
-ob-analytics audit /tmp/kalshi_ws --source depth_csv
-ob-analytics process /tmp/kalshi_ws --source depth_csv --gallery --output /tmp/kalshi_ws_out
+ob-analytics audit /tmp/kalshi_ws
+ob-analytics process /tmp/kalshi_ws --gallery --output /tmp/kalshi_ws_out
 ```
 
 The capture writes the same files as the polled capture, and the book is the

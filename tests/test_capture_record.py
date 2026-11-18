@@ -16,6 +16,7 @@ from ob_analytics import Pipeline, PipelineConfig
 from ob_analytics.capture_record import (
     CaptureRecord,
     read_record,
+    replay_source_of,
     source_declarations,
     write_record,
 )
@@ -76,6 +77,8 @@ class TestReadRecord:
                     "sequence_restarts": 2,
                     "tick_size": 0.001,
                     "lot_size": 1.0,
+                    "level": "L2",
+                    "replay_source": "depth_csv",
                     "book_updates": 7,
                 }
             )
@@ -89,6 +92,8 @@ class TestReadRecord:
             sequence_restarts=2,
             tick_size=0.001,
             lot_size=1.0,
+            level=Level.L2,
+            replay_source="depth_csv",
         )
 
     def test_a_file_in_the_capture_finds_it(self, tmp_path):
@@ -142,6 +147,42 @@ class _Declaring:
     clocks = Clocks.RECEIVE_ONLY
 
 
+class TestReplaySource:
+    """Which offline source reads a live source's capture back (#502)."""
+
+    def test_a_declared_reader_is_used(self):
+        class Declares(_Declaring):
+            replay_source = "my_reader"
+
+        assert replay_source_of(Declares()) == "my_reader"
+
+    def test_a_source_that_replays_files_reads_itself(self):
+        from ob_analytics.bitstamp import BitstampSource
+
+        assert replay_source_of(BitstampSource()) == "bitstamp"
+
+    @pytest.mark.parametrize(
+        ("level", "reader"), [(Level.L2, "depth_csv"), (Level.L3, "bitstamp")]
+    )
+    def test_otherwise_the_level_picks_the_reader(self, level, reader):
+        class AtLevel(_Declaring):
+            pass
+
+        AtLevel.level = level
+        assert replay_source_of(AtLevel()) == reader
+
+    def test_a_record_without_a_reader_is_read_by_its_level(self):
+        assert CaptureRecord(level=Level.L2).reading_source() == "depth_csv"
+        assert CaptureRecord(level=Level.L3).reading_source() == "bitstamp"
+        assert CaptureRecord(level=Level.L2, replay_source="x").reading_source() == "x"
+        assert CaptureRecord().reading_source() is None
+
+    def test_an_unknown_level_is_left_out(self, tmp_path):
+        (tmp_path / "meta.json").write_text(json.dumps({"level": "L9"}))
+        with pytest.warns(UserWarning, match="level 'L9'"):
+            assert read_record(tmp_path).level is None
+
+
 class TestWriteRecord:
     def test_what_is_written_reads_back(self, tmp_path):
         write_record(
@@ -156,6 +197,8 @@ class TestWriteRecord:
             clocks=Clocks.RECEIVE_ONLY,
             tick_size=0.5,
             lot_size=0.1,
+            level=Level.L2,
+            replay_source="depth_csv",
         )
 
     def test_leaves_no_temporary_file(self, tmp_path):

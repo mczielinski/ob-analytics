@@ -361,7 +361,12 @@ class CaptureManifest:
                 raise TypeError(f"capture manifest {key} {d[key]!r} is not a list")
         declarations = {
             k: d[k]
-            for k in ("feed_type", "trade_attribution", "sequence_kind")
+            for k in (
+                "feed_type",
+                "trade_attribution",
+                "sequence_kind",
+                "replay_source",
+            )
             if k in d
         }
         return cls(

@@ -98,6 +98,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 from loguru import logger
+from pydantic import Field
 
 from ob_analytics import _engine_frames
 from ob_analytics._utils import (
@@ -267,11 +268,30 @@ class DatabentoSettings(SourceSettings):
         writes.  Read only on the way out; the loader takes the file's own.
     """
 
-    instrument_id: int | None = None
-    publisher_id: int | None = None
-    raw_symbol: str | None = None
-    trades_from: Literal["fills", "prints"] = "fills"
-    dataset: str = "OB.ANALYTICS"
+    instrument_id: int | None = Field(
+        default=None, description="Keep only records with this instrument_id"
+    )
+    publisher_id: int | None = Field(
+        default=None, description="Keep only records from this publisher"
+    )
+    raw_symbol: str | None = Field(
+        default=None,
+        description=(
+            "Keep only records whose mapped symbol is this (needs a file with "
+            "Databento's symbol mapping)"
+        ),
+    )
+    trades_from: Literal["fills", "prints"] = Field(
+        default="fills",
+        description=(
+            "Build trades from the fill records (each names the resting order) "
+            "or the print records (the whole tape, no maker named)"
+        ),
+    )
+    dataset: str = Field(
+        default="OB.ANALYTICS",
+        description="The dataset id written into a DBN file this run saves",
+    )
 
 
 # ── Reading a DBN file into its raw record frame ──────────────────────

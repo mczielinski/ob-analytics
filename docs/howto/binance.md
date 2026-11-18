@@ -35,7 +35,7 @@ account or an API key: the order book and the trades are public.
 pip install "ob-analytics[ccxt]"
 
 ob-analytics capture ccxt --venue binance --pair BTC/USDT --minutes 10 -o /tmp/binance
-ob-analytics process /tmp/binance --source depth_csv --gallery --output /tmp/binance_out
+ob-analytics process /tmp/binance --gallery --output /tmp/binance_out
 ```
 
 `--pair` takes the ccxt symbol, `BTC/USDT`. Binance calls the same market
@@ -144,7 +144,7 @@ means](ccxt.md#what-a-size-0-row-means).
 ## Checking the capture
 
 ```bash
-ob-analytics audit /tmp/binance --source depth_csv
+ob-analytics audit /tmp/binance
 ```
 
 The `sequence` of a Binance capture is Binance's update ID. One Binance

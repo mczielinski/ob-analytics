@@ -343,6 +343,13 @@ Each segment of the capture holds `orders.csv` (L3) or `depth.csv` (L2) plus
 `trades.csv`, in the same schema the pipeline reads, so a segment feeds
 straight back in: `Pipeline.from_source("coinbase").run("capture/seg-0001/orders.csv")`.
 
+`ob-analytics process capture/` and `audit capture/` read the capture with
+the source its `meta.json` names as `replay_source`. A source that also
+replays files, like this one, is named by default. A live-only source is read
+by `bitstamp` (L3, `orders.csv`) or `depth_csv` (L2, `depth.csv`). If your
+source writes files that another offline source reads, set a
+`replay_source = "<name>"` attribute on it.
+
 To wait for the next message with a time limit, use
 `async with asyncio.timeout(...)`, not `asyncio.wait_for`. On Python 3.11,
 `wait_for` can drop the cancel that stops a segment when a message arrives at

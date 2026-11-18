@@ -19,13 +19,15 @@ For examples, see [Run from the command line](../howto/cli.md).
 | Flag | Description |
 |------|-------------|
 | `path` | Path to data file or directory |
-| `-s SOURCE`, `--source SOURCE` | Data source (default: bitstamp; registered: bitstamp, ccxt, cryptofeed, databento, depth_csv, kalshi, lobster) |
+| `-s SOURCE`, `--source SOURCE` | Data source (default: for a capture, the source its meta.json names; otherwise bitstamp. Registered: bitstamp, ccxt, cryptofeed, databento, depth_csv, kalshi, lobster). Run 'ob-analytics process PATH --source NAME --help' to see the flags of that source's settings |
 | `--trading-date TRADING_DATE` | Trading date, for a source that needs one (LOBSTER), as YYYY-MM-DD |
 | `--session-tz SESSION_TZ` | The venue's time zone, for a feed whose times count from the session's midnight (LOBSTER; default: America/New_York) |
 | `--tick-size TICK_SIZE` | The instrument's price step, in the quote currency (e.g. 0.001). Default: the source's, or a capture's own from its meta.json |
 | `--lot-size LOT_SIZE` | The instrument's size step, in the base asset (e.g. 0.0001). Default: the source's, or a capture's own from its meta.json |
 | `--depth-bins DEPTH_BINS` | Number of depth bins on each side of the book (default: 20) |
 | `--depth-bps DEPTH_BPS` | Width of each depth bin, in basis points (default: 25) |
+| `--symbol SYMBOL` | The instrument the data covers (e.g. BTC/USD): tags each row with a symbol column |
+| `--venue VENUE` | The venue the data comes from (e.g. kraken): tags each row with a venue column (default: the source's name, when --symbol is given) |
 | `-o OUTPUT`, `--output OUTPUT` | Where to save the results (default: ./output): a folder, or a file for a --format that writes one |
 | `--format FORMAT` | Format to save the results in (default: parquet). One of `bitstamp`, `databento`, `depth_csv`, `hftbacktest`, `lobster`, `nautilus`, `parquet`. |
 | `--cut TIME` | Run one time window at a time, cut at TIME (e.g. 2015-05-01T02:00; a time with no zone is UTC). Give it more than once for more windows. Peak memory is set by the largest window. Writes Parquet |
@@ -39,16 +41,39 @@ For examples, see [Run from the command line](../howto/cli.md).
 | Flag | Description |
 |------|-------------|
 | `path` | Path to data file or directory |
-| `-s SOURCE`, `--source SOURCE` | Data source (default: bitstamp when running the pipeline; registered: bitstamp, ccxt, cryptofeed, databento, depth_csv, kalshi, lobster) |
+| `-s SOURCE`, `--source SOURCE` | Data source (default: for a capture, the source its meta.json names; otherwise bitstamp. Registered: bitstamp, ccxt, cryptofeed, databento, depth_csv, kalshi, lobster). Run 'ob-analytics audit PATH --source NAME --help' to see the flags of that source's settings |
 | `--trading-date TRADING_DATE` | Trading date, for a source that needs one (LOBSTER), as YYYY-MM-DD |
 | `--session-tz SESSION_TZ` | The venue's time zone, for a feed whose times count from the session's midnight (LOBSTER; default: America/New_York) |
 | `--tick-size TICK_SIZE` | The instrument's price step, in the quote currency (e.g. 0.001). Default: the source's, or a capture's own from its meta.json |
 | `--lot-size LOT_SIZE` | The instrument's size step, in the base asset (e.g. 0.0001). Default: the source's, or a capture's own from its meta.json |
 | `--depth-bins DEPTH_BINS` | Number of depth bins on each side of the book (default: 20) |
 | `--depth-bps DEPTH_BPS` | Width of each depth bin, in basis points (default: 25) |
+| `--symbol SYMBOL` | The instrument the data covers (e.g. BTC/USD): tags each row with a symbol column |
+| `--venue VENUE` | The venue the data comes from (e.g. kraken): tags each row with a venue column (default: the source's name, when --symbol is given) |
 | `--from-parquet` | Read a saved 'process' output directory instead of running the pipeline. --source then only declares the feed of an output that records no declarations (one written by an older version); omit it to leave those undeclared |
 | `--strict` | Fail on warnings too, not only on errors |
 | `--json` | Emit the summary as JSON instead of text |
+
+## `ob-analytics process --source databento`
+
+The flags 'process' and 'audit' add when the 'databento' source reads the data: given with --source, or named by a capture's meta.json.
+
+| Flag | Description |
+|------|-------------|
+| `--instrument-id INSTRUMENT_ID` | Keep only records with this instrument_id |
+| `--publisher-id PUBLISHER_ID` | Keep only records from this publisher |
+| `--raw-symbol RAW_SYMBOL` | Keep only records whose mapped symbol is this (needs a file with Databento's symbol mapping) |
+| `--trades-from {fills,prints}` | Build trades from the fill records (each names the resting order) or the print records (the whole tape, no maker named) (default: fills) |
+| `--dataset DATASET` | The dataset id written into a DBN file this run saves (default: OB.ANALYTICS) |
+
+## `ob-analytics process --source depth_csv`
+
+The flags 'process' and 'audit' add when the 'depth_csv' source reads the data: given with --source, or named by a capture's meta.json.
+
+| Flag | Description |
+|------|-------------|
+| `--timestamp-unit {ms,us,ns}` | The unit of an integer epoch timestamp (default: ms) |
+| `--price-divisor PRICE_DIVISOR` | What a price in the file is divided by to reach the quote currency (default: 1) |
 
 ## `ob-analytics gallery`
 

@@ -150,8 +150,14 @@ class DepthCsvSettings(SourceSettings):
         1 (the default) means it is in the quote currency already.
     """
 
-    timestamp_unit: Literal["ms", "us", "ns"] = "ms"
-    price_divisor: int = Field(default=1, ge=1)
+    timestamp_unit: Literal["ms", "us", "ns"] = Field(
+        default="ms", description="The unit of an integer epoch timestamp"
+    )
+    price_divisor: int = Field(
+        default=1,
+        ge=1,
+        description="What a price in the file is divided by to reach the quote currency",
+    )
 
 
 def _csv_settings(settings: SourceSettings | None, where: str) -> DepthCsvSettings:
