@@ -1503,6 +1503,15 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **A settings flag works before the path** (#523). `process` and `audit`
+  read the arguments twice. The first read finds the source that reads the
+  data, and it did not know the settings flags. So when a settings flag came
+  before the path and `--source` was not given, its value was read as the
+  path: `ob-analytics process --instrument-id 42 capture/` looked for a
+  capture named `42`. The first read now knows the settings flags of every
+  registered offline source and skips each flag with its value. An on/off
+  flag takes no value. The second read still refuses a flag that the reading
+  source does not have.
 - **Every loader refuses an order price between two ticks** (#500). Only the
   price-level CSV loader checked prices. The Bitstamp, LOBSTER and Databento
   loaders rounded a price to the nearest tick and gave no warning, so on the

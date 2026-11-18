@@ -1450,3 +1450,87 @@ class TestReadingSourceSettings:
         )  # fmt: skip
         assert r.returncode == 2
         assert "--symbol, --price-divisor set how the pipeline runs" in r.stderr
+
+
+class TestSettingsFlagBeforeThePath:
+    """A settings flag works before the path as well as after it (#523)."""
+
+    @pytest.mark.parametrize("command", ["process", "audit"])
+    @pytest.mark.parametrize("before", [True, False], ids=["before", "after"])
+    def test_the_flag_reaches_the_reading_source(
+        self, cli_runner, tmp_path, command, before
+    ):
+        cap = str(_ccxt_capture(tmp_path / "cap"))
+        flag = ["--price-divisor", "0"]
+        r = cli_runner(command, *(flag + [cap] if before else [cap] + flag))
+        # The value 0 is refused by the depth_csv settings, so the flag reached
+        # them and was not read as the path.
+        assert r.returncode == 2
+        assert "Bad settings for source 'depth_csv'" in r.stderr
+
+    def test_a_value_before_the_path_is_not_the_path(self, monkeypatch, tmp_path):
+        from ob_analytics import cli
+        from ob_analytics.pipeline import Pipeline
+
+        cap = _ccxt_capture(tmp_path / "cap")
+        seen: dict = {}
+
+        def run(self, path, *args, **kwargs):
+            seen["path"] = Path(path)
+            seen["settings"] = self._source.settings
+            raise SystemExit(0)
+
+        monkeypatch.setattr(Pipeline, "run", run)
+        with pytest.raises(SystemExit):
+            cli.main(
+                ["process", "--price-divisor", "10", "--timestamp-unit=us",
+                 str(cap), "-o", str(tmp_path / "out")]
+            )  # fmt: skip
+        assert seen["path"] == cap
+        assert seen["settings"].price_divisor == 10
+        assert seen["settings"].timestamp_unit == "us"
+
+    @pytest.mark.parametrize("command", ["process", "audit"])
+    @pytest.mark.parametrize("on_off", ["--fast", "--no-fast"])
+    def test_an_on_off_flag_takes_no_value(self, monkeypatch, command, on_off):
+        from ob_analytics import cli
+        from ob_analytics.sources import SOURCES
+        from tests._fake_plugin_source import FakePluginSource
+
+        class OfflineFake(FakePluginSource):
+            def create_loader(self, config):  # pragma: no cover - not called
+                raise NotImplementedError
+
+        monkeypatch.setitem(SOURCES._items, "offlinefake", OfflineFake)
+        ignored = cli._every_settings_flag()
+        assert ignored["--fast"] is True
+        assert ignored["--market"] is False
+        parser = cli._build_parser(quiet=True, ignored=ignored)
+        args, unknown = parser.parse_known_args(
+            [command, on_off, "--market", "M-1", "cap/"]
+        )
+        assert args.path == "cap/"
+        assert unknown == []
+
+    def test_a_flag_with_no_value_is_named(self, cli_runner, tmp_path):
+        cap = str(_ccxt_capture(tmp_path / "cap"))
+        r = cli_runner("process", cap, "--timestamp-unit")
+        assert r.returncode == 2
+        assert "--timestamp-unit: expected one argument" in r.stderr
+
+    def test_a_shortened_flag_still_finds_the_source(self, cli_runner, tmp_path):
+        """``--trad`` is short for ``--trading-date`` only, among this source's flags."""
+        cap = str(_ccxt_capture(tmp_path / "cap"))
+        r = cli_runner(
+            "process", cap, "--trad", "2015-05-01", "--price-divisor", "0"
+        )  # fmt: skip
+        assert r.returncode == 2
+        assert "Bad settings for source 'depth_csv'" in r.stderr
+
+    def test_a_flag_of_another_source_before_the_path_is_refused(
+        self, cli_runner, tmp_path
+    ):
+        cap = str(_ccxt_capture(tmp_path / "cap"))
+        r = cli_runner("process", "--instrument-id", "5", cap)
+        assert r.returncode == 2
+        assert "unrecognized arguments" in r.stderr
