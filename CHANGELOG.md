@@ -1639,6 +1639,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   bundled sample. The live levels now sit in a heap, and the same call takes
   about 0.65 s on the same desktop. The output is unchanged, byte for byte.
   `queue_age_grid` uses the same heap.
+- **The matplotlib queue position plot draws in under a second** (#539). It
+  called `ax.plot` once for each order, and the gallery's zoom window on the
+  bundled sample holds thousands of orders, so the plot took about 22 s. It
+  now draws one line collection for each fate, with one path for each order,
+  and builds all the step points at once. The plot now takes under a second
+  on the same desktop, and its picture is unchanged, pixel for pixel.
 - **`queue_positions` no longer walks a long queue to find an order's rank**
   (#520). For each event, the engine counted the orders ahead of the order and
   added up their sizes, one by one. On the synthetic session a queue holds

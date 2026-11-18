@@ -1103,6 +1103,32 @@ def mpl_order_activity_per_order(
     return fig
 
 
+def _steps_post_paths(
+    ids: np.ndarray, x: np.ndarray, y: np.ndarray
+) -> list[np.ndarray]:
+    """Split points into one steps-post path per id.
+
+    Matches ``ax.plot(..., drawstyle="steps-post")`` called once per id:
+    ids come in order of first appearance, rows keep their order within an
+    id, and each path holds ``2n - 1`` vertices for an id with ``n`` rows.
+    An id with one row gets a one-vertex path: it draws nothing, as a
+    one-point line does, but still counts towards the axes' data limits.
+    """
+    codes, _ = pd.factorize(ids)
+    order = np.argsort(codes, kind="stable")
+    x, y = np.asarray(x, float)[order], np.asarray(y, float)[order]
+    if len(x) == 0:
+        return []
+    # Repeat each point, then shift x by one: the vertices run
+    # (x0, y0), (x1, y0), (x1, y1), (x2, y1), ...  Rows [s, e) of one id map
+    # to vertices [2s, 2e - 1), so no path reaches into the next id's points.
+    verts = np.column_stack((np.repeat(x, 2)[1:], np.repeat(y, 2)[:-1]))
+    counts = np.bincount(codes)
+    ends = np.cumsum(counts)
+    starts = ends - counts
+    return [verts[2 * s : 2 * e - 1] for s, e in zip(starts, ends)]
+
+
 @_themed
 def mpl_queue_position_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1126,15 +1152,24 @@ def mpl_queue_position_per_order(
         if side.empty:
             continue
         drew_any = True
-        for _, g in side.groupby("id", sort=False):
-            ax.plot(
-                mdates.date2num(g["timestamp"]),
-                g["rank"].to_numpy(),
-                color=color,
+        # One collection per fate, one path per order.  A path per order
+        # keeps the look of one line per order: overlapping orders darken,
+        # but an order's own corners do not (#539).
+        ax.add_collection(
+            collections.LineCollection(
+                _steps_post_paths(
+                    side["id"].to_numpy(),
+                    mdates.date2num(side["timestamp"]),
+                    side["rank"].to_numpy(dtype=float),
+                ),
+                colors=color,
                 alpha=0.5,
-                linewidth=1.0,
-                drawstyle="steps-post",
+                linewidths=1.0,
+                capstyle=mpl.rcParams["lines.solid_capstyle"],
+                joinstyle=mpl.rcParams["lines.solid_joinstyle"],
+                zorder=Line2D.zorder,
             )
+        )
         if show_markers and marker is not None:
             ends = side.groupby("id", sort=False).tail(1)
             x = mdates.date2num(ends["timestamp"])
