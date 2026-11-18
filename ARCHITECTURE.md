@@ -338,10 +338,11 @@ ob_analytics/
 ├── sources.py            # SOURCES registry: register_source, list_sources, get_source, entry-point discovery
 ├── _registry.py          # Registry and load_plugins: the one lookup and plug-in loader every registry uses
 ├── config.py             # PipelineConfig, InstrumentGrid, SourceSettings, Credential (frozen Pydantic models)
-├── protocols.py          # EventLoader, DepthLoader, TradeReader, DataWriter, Source, OfflineSource, RunContext
+├── protocols.py          # EventLoader, DepthLoader, TradeReader, DataWriter, Source, OfflineSource, RunContext, WindowedLoader
 ├── schemas.py            # column constants, dtypes, unit metadata + validators (validate_events_df, …)
 ├── exceptions.py         # ObAnalyticsError hierarchy
 ├── _secrets.py           # removes loaded credentials from files and logs
+├── _quality_checks.py    # QualityCheck, Severity: the record of one data-quality check (quality re-exports them)
 ├── cli.py                # CLI entry point (process, audit, gallery, bitstamp-demo, lobster-demo, capture, sources)
 ├── _demos.py             # the runs behind bitstamp-demo and lobster-demo
 │
