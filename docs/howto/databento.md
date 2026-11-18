@@ -115,6 +115,13 @@ source = DatabentoSource(
 )
 ```
 
+From the command line, each setting is a flag:
+
+```bash
+ob-analytics process file.dbn.zst --source databento --raw-symbol GOOGL -o out/
+ob-analytics process file.dbn.zst --source databento --instrument-id 1108 --publisher-id 41 -o out/
+```
+
 ## How the records map
 
 Databento's `action` field says what a record does. Only the first four change

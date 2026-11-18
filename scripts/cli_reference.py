@@ -1,7 +1,8 @@
 """Write the CLI flag reference page from the command's own parser.
 
 ``docs/api/cli-flags.md`` lists every flag of every ``ob-analytics``
-subcommand, and of ``capture`` for each built-in live source.  It is made from
+subcommand, of ``capture`` for each built-in live source, and the settings
+flags ``process`` and ``audit`` add for each built-in offline source.  It is made from
 the same ``argparse`` parsers the command reads, so it cannot drift from them.
 
 Usage::
@@ -19,7 +20,14 @@ import re
 import sys
 from pathlib import Path
 
-from ob_analytics.cli import _build_parser, _capture_parser, _settings_class
+from ob_analytics.cli import (
+    _add_settings_flags,
+    _build_parser,
+    _capture_parser,
+    _offline_settings_class,
+    _settings_class,
+    _settings_flag_names,
+)
 from ob_analytics.sources import get_source, list_sources
 
 PAGE = Path(__file__).resolve().parents[1] / "docs" / "api" / "cli-flags.md"
@@ -100,6 +108,32 @@ def _live_sources() -> list[str]:
     ]
 
 
+def _offline_sources() -> list[str]:
+    """The built-in offline sources whose settings have flags, in registry order."""
+    return [
+        name
+        for name in list_sources()
+        if get_source(name).__module__.startswith("ob_analytics.")
+        and (settings_cls := _offline_settings_class(name)) is not None
+        and _settings_flag_names(settings_cls)
+    ]
+
+
+def _settings_parser(source: str) -> argparse.ArgumentParser:
+    """The settings flags ``process`` and ``audit`` add for *source*."""
+    parser = argparse.ArgumentParser(
+        prog=f"ob-analytics process --source {source}",
+        add_help=False,
+        description=(
+            f"The flags 'process' and 'audit' add when the {source!r} source "
+            "reads the data: given with --source, or named by a capture's "
+            "meta.json."
+        ),
+    )
+    _add_settings_flags(parser, _offline_settings_class(source), "process")
+    return parser
+
+
 def render() -> str:
     """The text of the flag reference page."""
     root = _build_parser()
@@ -113,6 +147,14 @@ def render() -> str:
             continue
         seen.add(id(sub))
         sections.append(_section(f"ob-analytics {name}", sub))
+        if name == "audit":
+            for source in _offline_sources():
+                sections.append(
+                    _section(
+                        f"ob-analytics process --source {source}",
+                        _settings_parser(source),
+                    )
+                )
         if name == "capture":
             for source in _live_sources():
                 capture = _capture_parser(source, _settings_class(get_source(source)))

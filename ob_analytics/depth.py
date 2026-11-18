@@ -54,9 +54,21 @@ __all__ = [
 
 @lru_cache(maxsize=256)
 def _cached_breaks(range_len: int, bins: int) -> np.ndarray:
-    """Compute bin boundaries for a given price range length."""
+    """Compute the last offset in each bin of a window of *range_len* ticks.
+
+    The bins share out offsets ``0`` to ``range_len - 2`` in whole ticks; the
+    last offset of the window is left out.  The boundaries never go
+    backwards, so no bin is negative.  When the window has fewer ticks than
+    bins, some boundaries repeat, and a bin that ends on the same boundary as
+    the bin before it stays at zero.  The
+    best price (offset ``0``) is always in the first bin, even when the window
+    is a single tick.
+    """
     breaks = ((np.arange(1, bins + 1) * range_len + bins - 1) // bins) - 1
-    breaks[-1] = breaks[-1] - 1
+    # Capping every boundary at the last offset keeps them in order.  With at
+    # least as many ticks as bins, only the last boundary changes, by one, so
+    # outputs at normal prices are unchanged (#488).
+    np.minimum(breaks, max(range_len - 2, 0), out=breaks)
     return breaks
 
 

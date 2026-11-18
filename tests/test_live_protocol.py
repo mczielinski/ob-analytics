@@ -277,6 +277,8 @@ class TestDiagnosticsProtocol:
         result = asyncio.run(run_capturer(_FakeCapturer(), cfg))
         assert result.extras == {
             "source": "fake",
+            "level": "L3",
+            "replay_source": "bitstamp",
             "feed_type": "diff_feed",
             "trade_attribution": "both",
             "clocks": "both",
