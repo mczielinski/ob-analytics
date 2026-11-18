@@ -32,11 +32,10 @@ from ob_analytics._utils import (
     epoch_ns,
     finite_floats,
     lots_to_size,
-    price_to_ticks,
     read_csv_file,
     require_per_order_events,
-    size_to_lots,
     ticks_to_price,
+    to_grid,
     validate_non_empty,
 )
 from ob_analytics.capture_files import (
@@ -96,8 +95,11 @@ class BitstampLoader:
     Parameters
     ----------
     config : PipelineConfig, optional
-        Pipeline configuration.  ``price_decimals`` and ``volume_decimals``
-        control rounding precision.
+        Pipeline configuration: the instrument's ``tick_size`` and
+        ``lot_size``.  An order's price that is not a whole number of ticks
+        raises ``ConfigError``; a size between two lots is rounded with a
+        warning.  A trade's price can lie between two ticks, so it is rounded
+        to the nearest tick, not checked.
     venue, symbol : str, optional
         Optional instrument identity.  When either is supplied, the loaded
         frame gains per-row ``venue`` / ``symbol`` columns; ``venue`` falls
@@ -207,9 +209,22 @@ class BitstampLoader:
         events["original_number"] = events["original_number"] + 1
         # Canonical size is integer lots (issue #226) and canonical price
         # integer ticks (issue #155); the raw CSV carries a base-asset float and
-        # a quote-currency float, so both convert on the way in.
-        events["volume"] = size_to_lots(events["volume"], self._config.lot_size)
-        events["price"] = price_to_ticks(events["price"], self._config.tick_size)
+        # a quote-currency float, so both convert on the way in.  A price off
+        # the tick grid is refused (issue #500).
+        events["volume"] = to_grid(
+            events["volume"],
+            self._config.lot_size,
+            kind="size",
+            column="volume",
+            where=where,
+        )
+        events["price"] = to_grid(
+            events["price"],
+            self._config.tick_size,
+            kind="price",
+            column="price",
+            where=where,
+        )
 
         events["action"] = events["action"].astype(ACTION_DTYPE)
         events["direction"] = events["direction"].astype(BOOK_SIDE_DTYPE)
@@ -409,7 +424,14 @@ class BitstampTradeReader:
         # fill matching below compares exact integers rather than rounded
         # floats.
         amounts = pd.Series(
-            size_to_lots(raw["amount"], self._config.lot_size), index=raw.index
+            to_grid(
+                raw["amount"],
+                self._config.lot_size,
+                kind="size",
+                column="amount",
+                where=where,
+            ),
+            index=raw.index,
         )
 
         maker_event_id = self._resolve_event_ids(maker_id, amounts, ev_lookup)
@@ -426,7 +448,16 @@ class BitstampTradeReader:
                 # drop the zone to a naive numpy datetime64).
                 "timestamp": recv_ms.array,
                 # Trade prints share the events' integer-tick price grid (#155).
-                "price": price_to_ticks(raw["price"], self._config.tick_size),
+                # An execution can print between two ticks, so its price is
+                # rounded to the nearest tick, not checked (issue #500).
+                "price": to_grid(
+                    raw["price"],
+                    self._config.tick_size,
+                    kind="price",
+                    column="price",
+                    where=where,
+                    checked=np.zeros(len(raw), dtype=bool),
+                ),
                 "volume": amounts.values,
                 "direction": pd.Categorical(
                     raw["side"].astype(str), dtype=TRADE_SIDE_DTYPE

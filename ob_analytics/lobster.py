@@ -39,11 +39,10 @@ from ob_analytics._utils import (
     empty_trades,
     finite_floats,
     lots_to_size,
-    price_to_ticks,
     read_csv_file,
     require_per_order_events,
     seconds_after_midnight_to_datetime,
-    size_to_lots,
+    to_grid,
 )
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.depth import (
@@ -141,6 +140,11 @@ class LobsterLoader:
         grid (:data:`LOBSTER_GRID`), as in a pipeline run.  The file's price
         encoding
         (:data:`LOBSTER_PRICE_DIVISOR`) is part of the format, not a setting.
+        An order's price that is not a whole number of ticks raises
+        ``ConfigError``; a size between two lots is rounded with a warning.
+        An execution's price can lie between two ticks (a hidden order filled
+        at the midpoint), and a halt's price is a code, so neither is checked:
+        both are rounded to the nearest tick.
     trading_date : str or pd.Timestamp
         The calendar date of the trading session (LOBSTER timestamps are
         seconds after midnight and need a date anchor).
@@ -243,13 +247,24 @@ class LobsterLoader:
         # integer in ten-thousandths of a dollar, so divide by the feed's
         # encoding scale to reach the quote currency, then quantise to ticks.
         # The price is checked before the division, which a word would break.
+        # A price off the tick grid is refused (issue #500) on the order rows
+        # (types 1-3), whose price is a book level.  An execution (types 4-6)
+        # can print between two ticks (a hidden order filled at the midpoint),
+        # and a halt (type 7) holds a code (-1, 0 or 1); those are rounded.
         raw_price = finite_floats(raw["price"], "price", where)
-        raw["price"] = price_to_ticks(raw_price / LOBSTER_PRICE_DIVISOR, cfg.tick_size)
+        raw["price"] = to_grid(
+            raw_price / LOBSTER_PRICE_DIVISOR,
+            cfg.tick_size,
+            kind="price",
+            column="price",
+            where=where,
+            checked=raw["event_type"].isin([1, 2, 3]).to_numpy(),
+        )
         # Canonical size is integer lots (issue #226).  LOBSTER's Size column is
         # already a whole share count and its ``lot_size`` default is 1, so this
         # keeps the venue's own integer rather than routing it through a float.
-        raw["volume"] = size_to_lots(
-            finite_floats(raw["volume"], "size", where), cfg.lot_size
+        raw["volume"] = to_grid(
+            raw["volume"], cfg.lot_size, kind="size", column="size", where=where
         )
 
         raw["timestamp"] = seconds_after_midnight_to_datetime(
@@ -853,26 +868,31 @@ def _side_levels(
     divisor: int,
     tick_size: float,
     lot_size: float,
+    *,
+    where: str,
 ) -> tuple[np.ndarray, np.ndarray]:
     """One book side of the orderbook file in integer ticks and lots.
 
     *p*/*v* are the side's ``(n_rows, n_levels)`` price/size arrays, as the
-    file states them.  Each size is converted to a whole number of lots
-    (:func:`~ob_analytics._utils.size_to_lots`), as the loader converts the
-    message sizes, and each price to an integer tick count (``round((price /
-    divisor) / tick_size)``).  A level is present when its price is not the
-    *dummy* sentinel and its size is at least one lot; a level that is not
-    holds price 0 and size 0.
+    file states them.  Each size is converted to a whole number of lots and
+    each price to an integer tick count (``round((price / divisor) /
+    tick_size)``) by :func:`~ob_analytics._utils.to_grid`, as the loader
+    converts the message file, so a price off the tick grid is refused.
+    *where* names the file in the message.  A level is present when its
+    price is not the *dummy* sentinel and its size is at least one lot; a
+    level that is not holds price 0 and size 0.
 
     Returns ``(ticks, lots)``, both ``int64`` and shaped like *p*.
     """
-    lots = size_to_lots(v, lot_size)
+    lots = to_grid(v, lot_size, kind="size", column="size", where=where)
     valid = (p != dummy) & (lots > 0)
     ticks = np.zeros(p.shape, dtype=np.int64)
     if valid.any():
         # Each distinct price is converted once.
         uniq, inverse = np.unique(p[valid], return_inverse=True)
-        ticks[valid] = price_to_ticks(uniq / divisor, tick_size)[inverse]
+        ticks[valid] = to_grid(
+            uniq / divisor, tick_size, kind="price", column="price", where=where
+        )[inverse]
     return ticks, np.where(valid, lots, 0).astype(np.int64)
 
 
@@ -907,11 +927,14 @@ def _side_level_changes(
     divisor: int,
     tick_size: float,
     lot_size: float,
+    *,
+    where: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Volume changes of one book side across consecutive orderbook rows.
 
     *p*/*v* are the side's ``(n_rows, n_levels)`` price/size arrays, as the
-    file states them, read into ticks and lots by :func:`_side_levels`.
+    file states them, read into ticks and lots by :func:`_side_levels`
+    (*where* names the file in its messages).
     Duplicate tick prices within a row are summed in level order.
 
     Returns ``(row_indices, prices, volumes_after)`` for every (row, price)
@@ -920,7 +943,7 @@ def _side_level_changes(
     by the caller), ascending within each row, and the volumes ``int64`` lots.
     """
     n = p.shape[0]
-    ticks, vv = _side_levels(p, v, dummy, divisor, tick_size, lot_size)
+    ticks, vv = _side_levels(p, v, dummy, divisor, tick_size, lot_size, where=where)
     valid = vv > 0
     rp = np.where(valid, ticks.astype(np.float64), np.inf)
 
@@ -1026,7 +1049,8 @@ def lobster_depth_from_orderbook(
         If *events* lacks a column this needs, an ``original_number`` is
         missing, not a whole number, below 1 or repeated, or the orderbook file does not have one row per
         message: fewer rows than the events name, or a count other than
-        *message_rows*.
+        *message_rows*.  Also if a price in the file is not a whole number
+        of ticks.
     """
     validate_columns(
         events,
@@ -1095,11 +1119,12 @@ def lobster_depth_from_orderbook(
     # (the previous dict-diff emitted them in unspecified set order).
     grid = (LOBSTER_PRICE_DIVISOR, config.tick_size, config.lot_size)
 
+    where = f"LOBSTER orderbook {orderbook_path}"
     ask_idx, ask_p, ask_v = _side_level_changes(
-        ob_raw[:, :, 0], ob_raw[:, :, 1], _DUMMY_ASK_PRICE, *grid
+        ob_raw[:, :, 0], ob_raw[:, :, 1], _DUMMY_ASK_PRICE, *grid, where=where
     )
     bid_idx, bid_p, bid_v = _side_level_changes(
-        ob_raw[:, :, 2], ob_raw[:, :, 3], _DUMMY_BID_PRICE, *grid
+        ob_raw[:, :, 2], ob_raw[:, :, 3], _DUMMY_BID_PRICE, *grid, where=where
     )
 
     row_idx = np.concatenate([ask_idx, bid_idx])
@@ -1163,16 +1188,21 @@ def lobster_venue_book(orderbook_path: Path, config: PipelineConfig) -> BookLeve
         whose ``original_number`` is ``i + 1``.  Prices are integer ticks and
         sizes integer lots; a level the file leaves empty holds 0 and 0.
         Each of the file's levels stays one level, so the book compares
-        level by level with the rebuilt one only when each of the file's
-        prices is a whole number of ticks, as on LOBSTER's own cent grid.
+        level by level with the rebuilt one.
+
+    Raises
+    ------
+    ConfigError
+        If a price in the file is not a whole number of ticks.
     """
     ob_raw = _read_orderbook(orderbook_path)
     grid = (LOBSTER_PRICE_DIVISOR, config.tick_size, config.lot_size)
+    where = f"LOBSTER orderbook {orderbook_path}"
     ask_prices, ask_volumes = _side_levels(
-        ob_raw[:, :, 0], ob_raw[:, :, 1], _DUMMY_ASK_PRICE, *grid
+        ob_raw[:, :, 0], ob_raw[:, :, 1], _DUMMY_ASK_PRICE, *grid, where=where
     )
     bid_prices, bid_volumes = _side_levels(
-        ob_raw[:, :, 2], ob_raw[:, :, 3], _DUMMY_BID_PRICE, *grid
+        ob_raw[:, :, 2], ob_raw[:, :, 3], _DUMMY_BID_PRICE, *grid, where=where
     )
     return BookLevels(ask_prices, ask_volumes, bid_prices, bid_volumes)
 

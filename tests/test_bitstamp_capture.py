@@ -387,3 +387,39 @@ class TestUnparseableMessages:
         assert [t["trade_id"] for t in trades] == [6]
         assert cap.dropped == 1
         assert cap.diagnostics()["dropped"] == 1
+
+
+class TestRecordedGrid:
+    """The Bitstamp feed gives no tick or lot size, so the capturer records
+    the grid every written price and size sits on (#500)."""
+
+    def test_prices_on_the_default_grid_record_it(self, monkeypatch):
+        cap = _capturer(monkeypatch, frames=[], books=[_book(500, 7)])
+        _snapshot_ids(cap)
+        diag = cap.diagnostics()
+        assert (diag["tick_size"], diag["lot_size"]) == (0.01, 1e-8)
+        assert (diag["tick_size_changes"], diag["lot_size_changes"]) == (0, 0)
+
+    def test_a_finer_snapshot_price_makes_the_tick_finer(self, monkeypatch):
+        book = _book(500, 7)
+        book["asks"] = [["100.005", "0.123456789", "8"]]
+        cap = _capturer(monkeypatch, frames=[], books=[book])
+        _snapshot_ids(cap)
+        diag = cap.diagnostics()
+        assert diag["tick_size"] == 0.001
+        assert diag["tick_size_changes"] == 1
+        # The recorded lot stops at 1e-8: a finer size is rounded on replay.
+        assert diag["lot_size"] == 1e-8
+
+    def test_live_order_and_trade_events_are_fitted(self, monkeypatch):
+        cap = _capturer(monkeypatch, frames=[], books=[_book(500, 7)])
+        _snapshot_ids(cap)
+        order = json.loads(_order_frame(9, 1_000))
+        order["data"]["amount"] = "0.5"
+        cap._normalise_order_event(order, 1)
+        trade = json.loads(_trade_frame(3, 1_000))
+        trade["data"]["price"] = "100.0005"
+        cap._normalise_trade_event(trade, 1)
+        diag = cap.diagnostics()
+        assert diag["tick_size"] == 0.0001
+        assert diag["lot_size"] == 1e-8

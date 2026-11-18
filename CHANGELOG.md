@@ -1503,6 +1503,37 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **Every loader refuses an order price between two ticks** (#500). Only the
+  price-level CSV loader checked prices. The Bitstamp, LOBSTER and Databento
+  loaders rounded a price to the nearest tick and gave no warning, so on the
+  default 0.01 grid 0.036 became 0.04 and landed on another level. Every
+  loader now converts prices and sizes through one function,
+  `_utils.to_grid`. A price that is not a whole number of ticks raises
+  `ConfigError`, which names the column, gives an example value and gives
+  the tick size. A value within float error of a whole tick still passes. A
+  size between two lots is rounded with a `UserWarning`, as the price-level
+  CSV loader already did. It is not refused, because a capture records a lot
+  size no finer than `1e-8`: a venue that quotes finer sizes would give a
+  capture that cannot be read. Bitstamp's 8-decimal sizes and LOBSTER's and
+  Databento's whole sizes are on their default lot grids, so they do not
+  warn. Only prices of book levels are checked: an order's price, and every
+  price in the LOBSTER orderbook file. An execution can print between two
+  ticks (a hidden order filled at the midpoint, as in LOBSTER's type 5 rows,
+  or a Bitstamp or Databento trade), so execution prices are rounded to the
+  nearest tick as before. A LOBSTER halt's price is a code and a Databento
+  clear's price is never read, so they are not checked either.
+- **Bitstamp and cryptofeed captures record their tick and lot size** (#500).
+  Neither feed gives a tick or lot size, so these captures wrote none to
+  `meta.json`, and the replay used the default grid of 0.01 and `1e-8`. A
+  cryptofeed L3 capture is read by the Bitstamp loader, so a venue with a
+  finer tick was rounded to cents. Each capture now starts from the default
+  grid and makes each step ten times finer until every price and size it
+  writes sits on it, as a ccxt capture does. It records `tick_size`,
+  `lot_size`, `tick_size_changes` and `lot_size_changes`. A capture made
+  before this change has no such fields and still loads on the default grid.
+  If that capture has a price finer than a cent, it is now refused instead
+  of rounded: pass the real tick, e.g. `PipelineConfig(tick_size=0.001,
+  price_decimals=3)`.
 - **`queue_positions` no longer scans every live level per event** (#489).
   To find the touch, the engine took `max` or `min` over all non-empty price
   levels of a side for every event. On a real capture in time order thousands

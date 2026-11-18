@@ -108,10 +108,9 @@ from ob_analytics._utils import (
     epoch_ns,
     lots_to_size,
     off_tick_grid,
-    price_to_ticks,
     require_per_order_events,
-    size_to_lots,
     ticks_to_price,
+    to_grid,
     to_utc_ns,
 )
 from ob_analytics._windows import LoadedWindow
@@ -461,7 +460,11 @@ class DatabentoLoader:
         ``lot_size``.  A grid field it does not set comes from
         :data:`DATABENTO_GRID`, a cent tick and whole shares.  The raw prices are in Databento's fixed-point encoding
         (:data:`DBN_PRICE_DIVISOR`), which is part of the format, not a
-        setting.
+        setting.  A book record's price that is not a whole number of ticks
+        raises ``ConfigError``; a size between two lots is rounded with a
+        warning.  A trade or fill can print between two ticks (a midpoint
+        execution), and a clear's price is never read, so neither is checked:
+        both are rounded to the nearest tick.
     settings : DatabentoSettings, optional
         Which instrument and publisher of a multi-instrument file to read.
     venue, symbol : str, optional
@@ -665,16 +668,34 @@ class DatabentoLoader:
         if "sequence" in raw.columns:
             work["sequence"] = raw["sequence"].astype("int64").to_numpy()
 
+        work["direction"] = work["side"].map(_SIDE_TO_DIRECTION)
+        work = _usable_records(work)
+
         # Canonical price is integer ticks (issue #155) and canonical size
         # integer lots (issue #226).  The raw price is Databento's fixed-point
         # integer, so it divides by the feed's encoding scale to reach the
         # quote currency before it is quantised onto the instrument's tick.
-        work["price"] = price_to_ticks(
-            work["raw_price"].to_numpy() / DBN_PRICE_DIVISOR, cfg.tick_size
+        # A price off the tick grid is refused (issue #500) on the book
+        # actions, whose price is a level.  A trade or fill can print between
+        # two ticks (a midpoint execution), and a clear's price is never read
+        # and is often UNDEF_PRICE; those are rounded.
+        where = "DatabentoLoader"
+        work["price"] = to_grid(
+            work["raw_price"].to_numpy() / DBN_PRICE_DIVISOR,
+            cfg.tick_size,
+            kind="price",
+            column="price",
+            where=where,
+            checked=np.isin(work["action"].to_numpy(), list(BOOK_ACTIONS)),
         )
-        work["size_lots"] = size_to_lots(work["raw_size"].to_numpy(), cfg.lot_size)
-        work["direction"] = work["side"].map(_SIDE_TO_DIRECTION)
-        return _usable_records(work)
+        work["size_lots"] = to_grid(
+            work["raw_size"].to_numpy(),
+            cfg.lot_size,
+            kind="size",
+            column="size",
+            where=where,
+        )
+        return work
 
 
 class _BookFilter:

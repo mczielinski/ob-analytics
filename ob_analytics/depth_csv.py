@@ -49,7 +49,6 @@ Column names are flexible: ``side`` / ``direction`` and ``volume`` / ``size``
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -67,11 +66,9 @@ from ob_analytics._utils import (
     empty_trades,
     finite_floats,
     lots_to_size,
-    off_tick_grid,
-    price_to_ticks,
     read_csv_file,
-    size_to_lots,
     ticks_to_price,
+    to_grid,
     validate_non_empty,
 )
 from ob_analytics.capture_files import DEPTH_NAME, TRADES_NAME
@@ -192,47 +189,26 @@ def _to_ticks_on_grid(
 ) -> np.ndarray:
     """Convert a raw feed price column to integer ticks, refusing off-grid prices.
 
-    :func:`~ob_analytics._utils.price_to_ticks` rounds to the nearest tick, so a
-    price finer than ``tick_size`` would be moved with no warning: 0.036 on the
-    default 0.01 grid becomes 0.04.  A price-level CSV does not carry its own
-    tick size, so a wrong one is easy to pass and cannot be seen afterwards.
+    A price-level CSV does not carry its own tick size, so a wrong one is easy
+    to pass and cannot be seen afterwards; :func:`~ob_analytics._utils.to_grid`
+    refuses a price that is not a whole number of ticks.
     """
     quote = finite_floats(raw_price, "price", where) / price_divisor
-    off_grid = off_tick_grid(quote, cfg.tick_size)
-    if off_grid.any():
-        example = float(quote[off_grid][0])
-        raise ConfigError(
-            f"{where}: {int(off_grid.sum())} price(s) are not whole multiples "
-            f"of tick_size={cfg.tick_size!r} (for example {example!r}). Set the "
-            "instrument's real tick size, e.g. PipelineConfig(tick_size=0.001, "
-            "price_decimals=3). A ccxt capture records it as tick_size in "
-            "meta.json. A Pipeline given the capture's folder or a file in it "
-            "reads it from there, unless its config sets a tick size or it was "
-            "given its own loader."
-        )
-    return price_to_ticks(quote, cfg.tick_size)
+    return to_grid(
+        quote, cfg.tick_size, kind="price", column=str(raw_price.name), where=where
+    )
 
 
 def _to_lots(raw_size: pd.Series, cfg: PipelineConfig, where: str) -> np.ndarray:
     """Convert a raw size column to integer lots, warning about off-grid sizes.
 
-    :func:`~ob_analytics._utils.size_to_lots` rounds to the nearest lot.  A
-    capture records its venue's size step as ``lot_size``, so a size between
+    A capture records its venue's size step as ``lot_size``, so a size between
     two lots means the recorded step is wrong, and the rounded size is not the
-    venue's.  A size too large for ``int64`` lots raises ``ConfigError``.
+    venue's (see :func:`~ob_analytics._utils.to_grid`).
     """
-    size = finite_floats(raw_size, "size", where)
-    off_grid = off_tick_grid(size, cfg.lot_size)
-    if off_grid.any():
-        warnings.warn(
-            f"{where}: {int(off_grid.sum())} size(s) are not whole multiples of "
-            f"lot_size={cfg.lot_size!r} (for example {float(size[off_grid][0])!r}) "
-            "and were rounded to the nearest lot. Set the instrument's real "
-            "size step, e.g. PipelineConfig(lot_size=0.001, volume_decimals=3).",
-            UserWarning,
-            stacklevel=4,
-        )
-    return size_to_lots(size, cfg.lot_size)
+    return to_grid(
+        raw_size, cfg.lot_size, kind="size", column=str(raw_size.name), where=where
+    )
 
 
 # ── DepthCsvLoader ─────────────────────────────────────────────────────

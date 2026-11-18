@@ -7,7 +7,8 @@ shared internals.  Nothing in this module is part of the public API.
 from __future__ import annotations
 
 import math
-from typing import Any
+import warnings
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -323,6 +324,93 @@ def off_tick_grid(price: object, tick_size: float) -> np.ndarray:
 
 #: How many units of float rounding a division may miss a whole number by.
 _FLOAT_SLACK = 8 * float(np.finfo(np.float64).eps)
+
+
+def to_grid(
+    values: object,
+    step: float,
+    *,
+    kind: Literal["price", "size"],
+    column: str,
+    where: str,
+    checked: np.ndarray | None = None,
+) -> np.ndarray:
+    """Convert a loader's price or size column to whole ticks or lots.
+
+    Every loader converts its prices and sizes through this one function, so
+    each holds them to the instrument's grid the same way.  A *kind* of
+    ``"price"`` counts *values* in ticks of *step* (``tick_size``) with
+    :func:`price_to_ticks`; ``"size"`` counts them in lots of *step*
+    (``lot_size``) with :func:`size_to_lots`.  *values* are in the quote
+    currency or the base asset already, after any feed scale is divided out.
+
+    Both conversions round to the nearest step, so a value between two steps
+    would be moved.  A price between two ticks is refused: 0.036 on a 0.01
+    grid would become 0.04 and land on another level, and the tick size,
+    once wrong, cannot be seen in the result.  A size between two lots is
+    rounded with a warning instead: a capture records a lot size no finer
+    than ``1e-8``, so refusing would leave a capture of a venue that quotes
+    finer sizes with no grid it can be read on.  A value within float error
+    of a whole step is on the grid (:func:`off_tick_grid`).
+
+    Parameters
+    ----------
+    values
+        The column, as any array-like of numbers.
+    step
+        ``tick_size`` for a price, ``lot_size`` for a size.
+    kind
+        ``"price"`` or ``"size"``.
+    column
+        The column's name in the file, for the message.
+    where
+        The file or reader the column came from, for the message.
+    checked
+        A boolean mask of the rows held to the grid, for a column whose other
+        rows hold a code rather than a value (a LOBSTER halt's price, say).
+        The other rows are converted but not checked.  ``None`` checks every
+        row.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``int64`` ticks or lots, one per value.
+
+    Raises
+    ------
+    ConfigError
+        If a value is empty or not a finite number, if a price is not a whole
+        number of ticks, or if a size is too large to count in ``int64`` lots.
+    """
+    numbers = finite_floats(values, kind, where)
+    off_grid = off_tick_grid(numbers, step)
+    if checked is not None:
+        off_grid &= np.asarray(checked, dtype=bool)
+    if off_grid.any():
+        count = int(off_grid.sum())
+        example = float(numbers[off_grid].flat[0])
+        if kind == "price":
+            raise ConfigError(
+                f"{where}: {count} value(s) in the {column!r} column are not "
+                f"whole multiples of tick_size={step!r} (for example "
+                f"{example!r}). Set the instrument's real tick size, e.g. "
+                "PipelineConfig(tick_size=0.001, price_decimals=3). A live "
+                "capture records it as tick_size in meta.json. A Pipeline "
+                "given the capture's folder or a file in it reads it from "
+                "there, unless its config sets a tick size or it was given its "
+                "own loader."
+            )
+        warnings.warn(
+            f"{where}: {count} value(s) in the {column!r} column are not whole "
+            f"multiples of lot_size={step!r} (for example {example!r}) and "
+            "were rounded to the nearest lot. Set the instrument's real size "
+            "step, e.g. PipelineConfig(lot_size=0.001, volume_decimals=3).",
+            UserWarning,
+            stacklevel=3,
+        )
+    if kind == "price":
+        return price_to_ticks(numbers, step)
+    return size_to_lots(numbers, step)
 
 
 def ticks_to_price(
