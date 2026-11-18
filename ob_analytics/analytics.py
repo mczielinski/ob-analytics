@@ -1,6 +1,7 @@
 """Format-agnostic analytics on a run's frames.
 
-Order aggressiveness, trade impacts, and order type classification.  They work
+Order aggressiveness, trade impacts, maker resting times, cancelled orders,
+and order type classification.  They work
 on the outputs of any pipeline run, whatever the source format.  The book and
 lifecycle frames are in :mod:`ob_analytics.book`; the data-quality checks are
 in :mod:`ob_analytics.quality`.
@@ -23,6 +24,7 @@ from ob_analytics._utils import (
     size_scale,
     validate_non_empty,
 )
+from ob_analytics.book import order_lifecycles
 from ob_analytics.schemas import (
     ORDER_TYPE_DTYPE,
     validate_columns,
@@ -30,6 +32,8 @@ from ob_analytics.schemas import (
 from ob_analytics.trade_sign import quote_before
 
 __all__ = [
+    "cancelled_orders",
+    "maker_resting_times",
     "order_aggressiveness",
     "set_order_types",
     "trade_impacts",
@@ -221,6 +225,124 @@ def trade_impacts(trades: pd.DataFrame) -> pd.DataFrame:
         "direction",
     ]
     return impacts[cols]
+
+
+def maker_resting_times(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
+    """Return how long the maker order behind each trade had rested in the book.
+
+    Each trade is matched to its maker order through ``maker_event_id``, and
+    the maker's placement time is the earliest ``created`` row of that order.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Events with ``event_id``, ``id``, ``action`` and ``timestamp``.
+    trades : pandas.DataFrame
+        Trades with ``timestamp``, ``price``, ``volume``, ``direction`` and
+        ``maker_event_id``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per trade, in the order of *trades*, with columns
+        ``timestamp``, ``price`` (in the quote currency), ``volume`` (in the
+        instrument's units), ``direction`` (the aggressor's side),
+        ``maker_event_id``, ``id`` (the maker's order id), ``created_ts`` (when
+        the maker order was placed) and ``resting_s`` (seconds from placement
+        to the trade).  A trade whose maker order has no ``created`` row, such
+        as an order from the book that was there before the data starts, is
+        left out.
+
+    Raises
+    ------
+    ConfigError
+        If a required column is missing, or the prices or sizes are integers
+        and *trades* carries no ``tick_size`` or ``lot_size``.
+    """
+    validate_columns(
+        events, {"event_id", "id", "action", "timestamp"}, "maker_resting_times"
+    )
+    validate_columns(
+        trades,
+        {"timestamp", "price", "volume", "direction", "maker_event_id"},
+        "maker_resting_times",
+    )
+    tr = trades[["timestamp", "price", "volume", "direction", "maker_event_id"]]
+    tr = tr.assign(
+        price=tr["price"].to_numpy(dtype=np.float64)
+        / price_scale(trades, "maker_resting_times"),
+        volume=tr["volume"].to_numpy(dtype=np.float64)
+        / size_scale(trades, "maker_resting_times"),
+    )
+    created_ts = (
+        events[events["action"] == "created"]
+        .groupby("id")["timestamp"]
+        .min()
+        .rename("created_ts")
+    )
+    makers = events[["event_id", "id"]].rename(columns={"event_id": "maker_event_id"})
+    rested = tr.merge(makers, on="maker_event_id", how="inner").merge(
+        created_ts, on="id", how="inner"
+    )
+    rested["resting_s"] = (
+        rested["timestamp"] - rested["created_ts"]
+    ).dt.total_seconds()
+    return rested
+
+
+def cancelled_orders(events: pd.DataFrame) -> pd.DataFrame:
+    """Return each cancelled order's age and distance from the touch.
+
+    A cancelled order here is a *flashed-limit* order (see
+    :func:`set_order_types`): placed, then deleted with the size it came with,
+    with no fill or change in between.  Its placement and its end are read
+    from :func:`~ob_analytics.book.order_lifecycles`.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Events with the columns :func:`~ob_analytics.book.order_lifecycles`
+        needs, the ``type`` column of :func:`set_order_types` and the
+        ``aggressiveness_bps`` column of :func:`order_aggressiveness`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per cancelled order, in placement order, with columns ``id``,
+        ``direction``, ``price`` (in the quote currency), ``volume`` (the size
+        cancelled, in the instrument's units), ``placed_ts``, ``timestamp``
+        (when it was cancelled), ``age_s`` (seconds from placement to
+        cancellation) and ``distance_bps`` (how far the order was placed from
+        the best price on its own side, in basis points, with the sign of
+        :func:`order_aggressiveness`: positive when the order improved on that
+        price, negative when it sat behind it, and ``NaN`` when there was no
+        best price to measure from).
+
+    Raises
+    ------
+    ConfigError
+        If a required column is missing, or the prices or sizes are integers
+        and *events* carries no ``tick_size`` or ``lot_size``.
+    """
+    validate_columns(events, {"type", "aggressiveness_bps"}, "cancelled_orders")
+    lifecycles = order_lifecycles(events)
+    cancelled = lifecycles[
+        (lifecycles["type"] == "flashed-limit") & (lifecycles["outcome"] == "cancelled")
+    ]
+    return pd.DataFrame(
+        {
+            "id": cancelled["id"],
+            "direction": cancelled["direction"],
+            "price": cancelled["price"].to_numpy(dtype=np.float64)
+            / price_scale(events, "cancelled_orders"),
+            "volume": cancelled["placed_vol"].to_numpy(dtype=np.float64)
+            / size_scale(events, "cancelled_orders"),
+            "placed_ts": cancelled["placed_ts"],
+            "timestamp": cancelled["end_ts"],
+            "age_s": (cancelled["end_ts"] - cancelled["placed_ts"]).dt.total_seconds(),
+            "distance_bps": cancelled["aggressiveness_bps"],
+        }
+    ).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

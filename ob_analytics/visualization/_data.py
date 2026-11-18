@@ -8,7 +8,6 @@ DataFrames into plain dicts consumable by **any** rendering backend
 from __future__ import annotations
 
 import math
-import re
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -25,6 +24,7 @@ from ob_analytics.depth import (
     _mid_price,
     _readable_mid,
     book_imbalance,
+    depth_bands,
     filter_depth,
     imbalance_levels,
     micro_price,
@@ -1928,7 +1928,8 @@ def prepare_trade_tape_l3_data(
     keeps those lollipops and adds, for every execution, the life of the *maker*
     order it consumed: a thin horizontal span from that order's creation to the
     fill, drawn at the maker's price -- the L3 differentiator, revealing how long
-    the resting liquidity behind each trade had waited.
+    the resting liquidity behind each trade had waited.  The maker times come
+    from :func:`~ob_analytics.analytics.maker_resting_times`.
 
     Trade prices are **never** quantile-clipped: the y-axis is
     padded to the data extent within the time window, so spike prints stay fully
@@ -1938,22 +1939,13 @@ def prepare_trade_tape_l3_data(
     are aggregated to one-second VWAPs (``dense=True``); the per-trade maker
     spans are still returned so the renderer can draw them thin underneath.
     """
-    start_time, end_time = _default_start_end(trades, start_time, end_time)
-    tr = trades[
-        (trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)
-    ][["timestamp", "price", "volume", "direction", "maker_event_id"]]
+    from ob_analytics.analytics import maker_resting_times
 
-    # Map each trade's maker event -> the maker order id -> its creation time.
-    event_to_id = events[["event_id", "id"]]
-    created_ts = (
-        events[events["action"] == "created"]
-        .groupby("id")["timestamp"]
-        .min()
-        .rename("created_ts")
+    start_time, end_time = _default_start_end(trades, start_time, end_time)
+    tr = maker_resting_times(
+        events,
+        trades[(trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)],
     )
-    tr = tr.merge(
-        event_to_id, left_on="maker_event_id", right_on="event_id", how="inner"
-    ).merge(created_ts, on="id", how="inner")
 
     # Optional deliberate price crop only; default keeps every print on-axis.
     if not tr.empty:
@@ -2013,6 +2005,9 @@ def prepare_cancellations_l3_data(
     the prevailing best at creation), split by side.
 
     Cancellations are deleted *flashed-limit* orders, matching the L2 face.
+    The table comes from :func:`~ob_analytics.analytics.cancelled_orders`;
+    this step keeps the orders cancelled inside the window and puts both axes
+    on a log scale.
     Both axes are heavy-tailed and span several orders of magnitude -- the
     latent populations (fleeting sub-100ms fishing at the touch, patient
     human-scale orders, deep orders pulled later) only separate on **log-log**
@@ -2023,22 +2018,15 @@ def prepare_cancellations_l3_data(
     the degenerate aggressiveness values (orders priced against a near-empty
     opposite best, which blow up to absurd bps) -- not real resting depth.
     """
-    start_time, end_time = _default_start_end(events, start_time, end_time)
-    deleted = events[
-        (events["action"] == "deleted")
-        & (events["type"] == "flashed-limit")
-        & (events["timestamp"] >= start_time)
-        & (events["timestamp"] <= end_time)
-    ][["id", "timestamp", "volume", "direction"]]
-    created = events[events["action"] == "created"][
-        ["id", "timestamp", "aggressiveness_bps"]
-    ].rename(columns={"timestamp": "created_ts", "aggressiveness_bps": "distance_bps"})
+    from ob_analytics.analytics import cancelled_orders
 
-    cancels = deleted.merge(created, on="id", how="inner").dropna(
-        subset=["distance_bps"]
-    )
-    cancels["age_s"] = (cancels["timestamp"] - cancels["created_ts"]).dt.total_seconds()
-    cancels = cancels[cancels["age_s"] >= 0].copy()
+    start_time, end_time = _default_start_end(events, start_time, end_time)
+    cancels = cancelled_orders(events).dropna(subset=["distance_bps"])
+    cancels = cancels[
+        (cancels["timestamp"] >= start_time)
+        & (cancels["timestamp"] <= end_time)
+        & (cancels["age_s"] >= 0)
+    ].copy()
 
     # Floor onto the log scale instead of quantile-clipping the tails: instant
     # cancels land in a thin "age floor" band, at-touch placements in a
@@ -2538,10 +2526,11 @@ def prepare_volume_percentiles_data(
 ) -> dict[str, Any]:
     """Prepare data for volume-percentile stacked area chart.
 
-    The BPS bins are discovered from the ``(bid|ask)_vol<N>bps`` columns of
-    *depth_summary*, so any ``depth_bps`` / ``depth_bins`` configuration works
-    (the previous hardcoded 25–500 bps range raised ``KeyError`` for anything
-    else).  A window with no rows gives empty ``asks_cumsum`` /
+    The volume in each band comes from :func:`~ob_analytics.depth.depth_bands`,
+    averaged over seconds, or over minutes for a window longer than 15
+    minutes.  The bands are read from the ``(bid|ask)_vol<N>bps`` columns of
+    *depth_summary*, so any ``depth_bps`` / ``depth_bins`` configuration
+    works.  A window with no rows gives empty ``asks_cumsum`` /
     ``bids_cumsum_neg`` frames that keep the bin columns; the renderers draw a
     "no data" figure.
     """
@@ -2551,38 +2540,19 @@ def prepare_volume_percentiles_data(
     if end_time is None:
         end_time = depth_summary["timestamp"].iloc[-1]
 
-    bps_levels = sorted(
-        int(m.group(1))
-        for c in depth_summary.columns
-        if (m := re.fullmatch(r"bid_vol(\d+)bps", str(c)))
-    )
-    if not bps_levels:
-        raise ConfigError(
-            "prepare_volume_percentiles_data: no 'bid_vol<N>bps' columns in "
-            f"depth_summary. Columns: {list(depth_summary.columns)}"
-        )
-    bid_names = [f"bid_vol{b}bps" for b in bps_levels]
-    ask_names = [f"ask_vol{b}bps" for b in bps_levels]
-
+    # Average over seconds, or over minutes for a window longer than 15
+    # minutes, so the stacked areas stay readable.
     td = round((end_time - start_time).total_seconds())
-    frequency = "mins" if td > 900 else "secs"
-    delta = timedelta(seconds=60 if frequency == "mins" else 1)
-
-    mask = (depth_summary["timestamp"] >= (start_time - delta)) & (
+    interval = "1min" if td > 900 else "1s"
+    mask = (depth_summary["timestamp"] >= (start_time - pd.Timedelta(interval))) & (
         depth_summary["timestamp"] <= end_time
     )
-    ob = depth_summary.loc[mask, ["timestamp"] + bid_names + ask_names]
-    ob = ob.drop_duplicates(subset="timestamp", keep="last")
-    ob = ob.set_index("timestamp")
-
-    if frequency == "mins":
-        intervals = pd.DatetimeIndex(ob.index).floor("min")
-    else:
-        intervals = pd.DatetimeIndex(ob.index).floor("s")
-
-    aggregated = ob.groupby(intervals).mean()
-    aggregated.index = pd.DatetimeIndex(aggregated.index) + delta
-    ob = aggregated.reset_index().rename(columns={"index": "timestamp"})
+    ob = depth_bands(depth_summary.loc[mask], interval=interval)
+    bps_levels = [
+        int(c.removeprefix("bid_vol").removesuffix("bps"))
+        for c in ob.columns
+        if c.startswith("bid_vol")
+    ]
 
     pad = max(3, len(str(bps_levels[-1])))
     bid_names_fmt = [f"bid_vol{b:0{pad}d}bps" for b in bps_levels]

@@ -27,6 +27,8 @@ after every event, as integer arrays.
 
 ::: ob_analytics.depth.summarize_depth
 
+::: ob_analytics.depth.depth_bands
+
 ::: ob_analytics.depth.price_level_volume
 
 ::: ob_analytics.depth.filter_depth

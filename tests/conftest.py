@@ -519,8 +519,9 @@ def sample_cancellation_events() -> pd.DataFrame:
     """Paired created/deleted flashed-limit orders for the L3 cancellations face.
 
     Each order ``id`` has a ``created`` row carrying ``aggressiveness_bps``
-    (placement distance) and a later ``deleted`` row carrying the cancelled
-    volume -- exactly what :func:`~ob_analytics.visualization.prepare.cancellations` merges on at L3.
+    (placement distance) and a later ``deleted`` row with the same volume and
+    no fill -- what :func:`~ob_analytics.analytics.cancelled_orders` reads
+    through :func:`~ob_analytics.book.order_lifecycles`.
     """
     ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
     rng = np.random.default_rng(7)
@@ -531,11 +532,14 @@ def sample_cancellation_events() -> pd.DataFrame:
         created_ts = ts + pd.Timedelta(seconds=i)
         age = float(rng.uniform(1.0, 20.0))
         vol = float(rng.uniform(100, 1000))
+        price = 236.0 + 0.01 * i
         rows.append(
             {
                 "id": oid,
                 "timestamp": created_ts,
+                "price": price,
                 "volume": vol,
+                "fill": 0.0,
                 "direction": direction,
                 "action": "created",
                 "type": "flashed-limit",
@@ -546,7 +550,9 @@ def sample_cancellation_events() -> pd.DataFrame:
             {
                 "id": oid,
                 "timestamp": created_ts + pd.Timedelta(seconds=age),
+                "price": price,
                 "volume": vol,
+                "fill": 0.0,
                 "direction": direction,
                 "action": "deleted",
                 "type": "flashed-limit",

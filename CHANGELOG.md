@@ -683,6 +683,15 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   card from plain numbers. Each built-in metric gets a gallery card.
   `ofi_by_horizon` is the multi-horizon order flow imbalance that the
   `ofi_horizon` face draws, now a function in `flow_toxicity`.
+- **Three measurements that only the plots made are now functions** (#493).
+  Each returns a DataFrame in the instrument's units, and its plot data
+  function calls it. `analytics.cancelled_orders(events)` gives the age and
+  distance from the touch of each cancelled order, read from
+  `order_lifecycles`. `analytics.maker_resting_times(events, trades)` gives
+  how long the maker of each trade had rested. `depth.depth_bands(depth_summary,
+  interval=)` gives the volume in each distance band over time, which the
+  `volume_percentiles` face stacks. Who is in the queue at the touch was
+  already `queue.queue_age_grid`. The pictures do not change.
 - **A book replay** (#117). The `book_replay` concept steps through the book
   over part of a run, on Plotly: the ladder at one instant per second beside
   the trades and the mid, with a slider and play buttons at 1×, 5× and 20×
