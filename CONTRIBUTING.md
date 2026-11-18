@@ -99,9 +99,13 @@ uv run python scripts/bench_scale.py --envelope         # the scale table
 Seconds belong to the machine that measured them, so the committed baseline is
 recorded on the CI runner, not on a laptop: run the `bench` workflow by hand
 with `record` set, download the `bench-baseline` artifact, and commit it in its
-own labelled commit. Locally the script says which machine the baseline came
-from when it is not the one in front of you, so a failure there is a hint, not a
-verdict.
+own labelled commit. Runners differ in speed: on main, the depth stage has
+taken from 5 to 17 seconds on the sample. The check fails a stage at twice its
+baseline, so compare the recorded seconds with recent runs on main. If they
+are near the fastest, record again: a baseline from a fast runner makes the
+check fail on a slow one. Locally the script says which machine the baseline
+came from when it is not the one in front of you, so a failure there is a
+hint, not a verdict.
 
 ### CI checks
 
