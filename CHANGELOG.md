@@ -354,8 +354,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   axes must stay near the run's times and traded prices. Its size axes must
   not draw sizes larger than the sizes the plot was given. A new face in the
   table is tested without a new test. Faces that fail today are marked as
-  expected failures: book signals, the matplotlib Amihud and Roll cards
-  (#497), and the plotly bars card, whose volume axis is titled "Price".
+  expected failures: book signals and the matplotlib Amihud and Roll cards
+  (#497).
   `tests/test_golden_sources.py` pins the output of a small LOBSTER day and
   the toy price-level session, beside the synthetic and Bitstamp baselines.
 - **`process` and `audit` read a capture without `--source`** (#502). A live
@@ -1527,6 +1527,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The Plotly bars card titles its volume axis "Volume"** (#504). It was
+  titled "Price", like the price axis.
 - **The Plotly gallery of the bundled sample is 28 MiB, not 231 MiB** (#491).
   Each line carried every row of `depth_summary`, so `book_signals.html`
   alone was 82 MiB. The data functions now thin a long series to 1,000 time

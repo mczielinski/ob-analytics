@@ -71,9 +71,6 @@ KNOWN_FAILURES: dict[Coordinate, str] = {
     ("amihud", None, "matplotlib"): _ONE_WINDOW,
     # The one value is NaN, so the time axis falls back to 1970.
     ("roll_spread", None, "matplotlib"): _ONE_WINDOW,
-    ("bars", None, "plotly"): (
-        "plotly_bars titles every y axis 'Price', the volume axis too"
-    ),
 }
 
 
