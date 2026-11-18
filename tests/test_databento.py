@@ -1282,8 +1282,8 @@ def resting_orders(events: pd.DataFrame) -> set[tuple[int, int, int]]:
     book = order_book(events)
     return {
         (int(i), int(p), int(v))
-        for side in ("bids", "asks")
-        for i, p, v in zip(book[side]["id"], book[side]["price"], book[side]["volume"])
+        for side in (book.bids, book.asks)
+        for i, p, v in zip(side["id"], side["price"], side["volume"])
     }
 
 

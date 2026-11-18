@@ -19,6 +19,7 @@ from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 
+from ob_analytics.book import BookSnapshot
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.visualization import (
     Level,
@@ -208,7 +209,9 @@ class TestFigureLayout:
 
     def test_empty_book_draws_no_legend(self):
         empty = pd.DataFrame({"price": [], "volume": [], "liquidity": []})
-        book = {"bids": empty, "asks": empty, "timestamp": 1430438400}
+        book = BookSnapshot(
+            timestamp=pd.Timestamp(1430438400, unit="s"), bids=empty, asks=empty
+        )
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             fig = plot(
@@ -704,14 +707,16 @@ class TestPlotOrderOutcomeL3:
 
 class TestPlotBookSnapshot:
     @staticmethod
-    def _order_book() -> dict:
+    def _order_book() -> BookSnapshot:
         bids = pd.DataFrame(
             {"price": [236.50, 236.00], "volume": [100, 200], "liquidity": [100, 300]}
         )
         asks = pd.DataFrame(
             {"price": [237.00, 237.50], "volume": [150, 250], "liquidity": [150, 400]}
         )
-        return {"bids": bids, "asks": asks, "timestamp": 1430438400}
+        return BookSnapshot(
+            timestamp=pd.Timestamp(1430438400, unit="s"), bids=bids, asks=asks
+        )
 
     @pytest.mark.parametrize("level", [Level.L2, Level.L3])
     @pytest.mark.parametrize("concept", ["book_snapshot", "depth_chart"])
@@ -776,23 +781,23 @@ class TestPlotBookSnapshot:
         # composition must not render identically (they were md5-identical
         # before §3.1). One level holds three orders; L3 segments it, L2 does
         # not.
-        book = {
-            "bids": pd.DataFrame(
+        book = BookSnapshot(
+            timestamp=pd.Timestamp(1430438400, unit="s"),
+            bids=pd.DataFrame(
                 {
                     "price": [236.5, 236.5, 236.5, 236.0],
                     "volume": [40.0, 30.0, 30.0, 100.0],
                     "liquidity": [40.0, 70.0, 100.0, 200.0],
                 }
             ),
-            "asks": pd.DataFrame(
+            asks=pd.DataFrame(
                 {
                     "price": [237.0, 237.5],
                     "volume": [100.0, 100.0],
                     "liquidity": [100.0, 200.0],
                 }
             ),
-            "timestamp": 1430438400,
-        }
+        )
         buffers = {}
         for level in (Level.L2, Level.L3):
             data = prepare.book_snapshot(book, level=level)
@@ -804,23 +809,23 @@ class TestPlotBookSnapshot:
 
     def test_windowing_keeps_top_n_levels(self) -> None:
         prices = np.arange(100.0, 80.0, -1.0)  # 20 levels per side
-        book = {
-            "bids": pd.DataFrame(
+        book = BookSnapshot(
+            timestamp=pd.Timestamp(1430438400, unit="s"),
+            bids=pd.DataFrame(
                 {
                     "price": prices,
                     "volume": np.ones_like(prices),
                     "liquidity": np.arange(1.0, len(prices) + 1.0),
                 }
             ),
-            "asks": pd.DataFrame(
+            asks=pd.DataFrame(
                 {
                     "price": prices + 25.0,
                     "volume": np.ones_like(prices),
                     "liquidity": np.arange(1.0, len(prices) + 1.0),
                 }
             ),
-            "timestamp": 1430438400,
-        }
+        )
         data = prepare.book_snapshot(book, top_n=5, level="L2")
         assert data["bids"]["price"].nunique() == 5
         assert data["asks"]["price"].nunique() == 5
@@ -840,23 +845,23 @@ class TestPlotBookSnapshot:
     def test_quantiles_capped_at_three_per_side(self) -> None:
         # Many heavy levels (per-order rows) must still yield <= 3 guides/side.
         prices = np.arange(100.0, 80.0, -1.0)
-        book = {
-            "bids": pd.DataFrame(
+        book = BookSnapshot(
+            timestamp=pd.Timestamp(1430438400, unit="s"),
+            bids=pd.DataFrame(
                 {
                     "price": prices,
                     "volume": np.arange(1.0, len(prices) + 1.0),
                     "liquidity": np.arange(1.0, len(prices) + 1.0),
                 }
             ),
-            "asks": pd.DataFrame(
+            asks=pd.DataFrame(
                 {
                     "price": prices + 25.0,
                     "volume": np.arange(1.0, len(prices) + 1.0),
                     "liquidity": np.arange(1.0, len(prices) + 1.0),
                 }
             ),
-            "timestamp": 1430438400,
-        }
+        )
         data = prepare.book_snapshot(book, show_quantiles=True, top_n=None, level="L2")
         assert len(data["bid_quantiles"]) <= 3
         assert len(data["ask_quantiles"]) <= 3

@@ -119,6 +119,7 @@ from ob_analytics.features import (
 )
 from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
+    VpinResult,
     kyle_lambda,
     ofi_by_window,
     order_flow_imbalance,
@@ -286,6 +287,7 @@ __all__ = [
     "TradeAttribution",
     "TradeReader",
     "UnknownNameError",
+    "VpinResult",
     "WriteTarget",
     "__version__",
     "amihud",

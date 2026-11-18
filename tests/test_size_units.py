@@ -98,7 +98,7 @@ def test_a_price_level_run_puts_them_on_every_frame_too(tmp_path) -> None:
 
 def test_the_three_vpin_calls_use_the_same_half_btc_buckets(sample, shown) -> None:
     from_metric = sample.metric("vpin", bucket_volume=0.5)
-    from_function = vpin(sample.trades, bucket_volume=0.5)
+    from_function = vpin(sample.trades, bucket_volume=0.5).table
     # What result.plot("vpin", bucket_volume=0.5) draws.
     from_plot = _metric_payload(get_metric("vpin"), sample, bucket_volume=0.5)[
         "vpin_df"
@@ -108,7 +108,7 @@ def test_the_three_vpin_calls_use_the_same_half_btc_buckets(sample, shown) -> No
     expected = int(shown.trades["volume"].sum() // 0.5)
     for frame in (from_metric, from_function, from_plot):
         assert len(frame) == expected
-        assert frame.attrs["bucket_volume"] == 0.5
+    assert from_metric.attrs["bucket_volume"] == 0.5
     pd.testing.assert_frame_equal(from_metric, from_function)
     pd.testing.assert_frame_equal(from_metric, from_plot, check_exact=False)
 
@@ -125,21 +125,21 @@ def test_result_plot_vpin_draws_with_a_size_in_btc(sample) -> None:
 
 def test_the_readme_vpin_example_runs(sample) -> None:
     # As the README shows it: 0.25 BTC buckets, about sixty on the sample.
-    vpin_df = vpin(sample.trades, bucket_volume=0.25)
+    fit = vpin(sample.trades, bucket_volume=0.25)
 
-    assert vpin_df.attrs["bucket_volume"] == 0.25
-    assert len(vpin_df) >= 50
+    assert fit.bucket_volume == 0.25
+    assert len(fit.table) >= 50
 
 
 def test_the_default_bucket_is_reported_in_btc(sample, shown) -> None:
     picked = vpin_bucket_volume(sample.trades)
 
     assert picked == pytest.approx(vpin_bucket_volume(shown.trades))
-    vpin_df = vpin(sample.trades)
-    assert vpin_df.attrs["bucket_volume"] == pytest.approx(picked)
+    fit = vpin(sample.trades)
+    assert fit.bucket_volume == pytest.approx(picked)
     # The default round-trips: passing it back cuts the same buckets.
-    again = vpin(sample.trades, bucket_volume=vpin_df.attrs["bucket_volume"])
-    assert len(again) == len(vpin_df)
+    again = vpin(sample.trades, bucket_volume=fit.bucket_volume)
+    assert len(again.table) == len(fit.table)
 
 
 def test_bulk_volume_classification_buckets_are_in_btc(sample, shown) -> None:

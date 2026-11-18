@@ -60,7 +60,7 @@ class TestOrderBook:
             ),
         )
         result = order_book(events, at=None)
-        assert result["timestamp"] == pd.Timestamp("2015-01-01 00:00:02")
+        assert result.timestamp == pd.Timestamp("2015-01-01 00:00:02")
 
     def test_max_levels_limits_output(self):
         """max_levels caps the number of price levels returned."""
@@ -107,7 +107,7 @@ class TestOrderBook:
             ),
         )
         result = order_book(events, max_levels=2)
-        assert len(result["bids"]) <= 2
+        assert len(result.bids) <= 2
 
     def test_deleted_orders_not_in_book(self):
         """Orders that were deleted before tp should not appear."""
@@ -144,7 +144,7 @@ class TestOrderBook:
             ),
         )
         result = order_book(events, at=pd.Timestamp("2015-01-01 00:00:03"))
-        assert 10 not in result["bids"]["id"].values
+        assert 10 not in result.bids["id"].values
 
     def test_changed_order_uses_latest_state(self):
         """A changed order should use its most recent volume/price."""
@@ -181,7 +181,7 @@ class TestOrderBook:
             ),
         )
         result = order_book(events, at=pd.Timestamp("2015-01-01 00:00:03"))
-        bid_row = result["bids"][result["bids"]["id"] == 10]
+        bid_row = result.bids[result.bids["id"] == 10]
         assert len(bid_row) == 1
         assert bid_row.iloc[0]["volume"] == 3.0  # changed volume, not original
 
@@ -221,9 +221,9 @@ class TestOrderBook:
         )
         result = order_book(events, bps_range=100)  # 1% range
         # Bid at 50 is ~50% away from best bid 100, should be filtered
-        assert 20 not in result["bids"]["id"].values
+        assert 20 not in result.bids["id"].values
         # Bid at 100 should survive
-        assert 10 in result["bids"]["id"].values
+        assert 10 in result.bids["id"].values
 
 
 class TestCanonicalActiveSet:
@@ -266,8 +266,8 @@ class TestCanonicalActiveSet:
             ),
         )
         result = order_book(events)
-        assert 10 not in result["bids"]["id"].values
-        assert 20 in result["asks"]["id"].values
+        assert 10 not in result.bids["id"].values
+        assert 20 in result.asks["id"].values
 
     def test_partially_executed_order_keeps_outstanding_size(self):
         events = _events(
@@ -293,7 +293,7 @@ class TestCanonicalActiveSet:
             ),
         )
         result = order_book(events)
-        row = result["bids"].set_index("id").loc[10]
+        row = result.bids.set_index("id").loc[10]
         assert row["volume"] == 2.0
 
     def test_pre_existing_order_without_created_is_excluded(self):
@@ -320,8 +320,8 @@ class TestCanonicalActiveSet:
             ),
         )
         result = order_book(events)
-        assert 9 not in result["asks"]["id"].values
-        assert 10 in result["bids"]["id"].values
+        assert 9 not in result.asks["id"].values
+        assert 10 in result.bids["id"].values
 
     def test_book_is_not_crossed_after_exhaustions(self):
         # An exhausted best ask must not pin the touch below newer bids.
@@ -368,6 +368,6 @@ class TestCanonicalActiveSet:
             ),
         )
         result = order_book(events)
-        best_bid = result["bids"].iloc[0]["price"]
-        best_ask = result["asks"].iloc[-1]["price"]
+        best_bid = result.bids.iloc[0]["price"]
+        best_ask = result.asks.iloc[-1]["price"]
         assert best_bid < best_ask

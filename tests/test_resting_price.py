@@ -69,8 +69,8 @@ class TestAFillReportedAtAnotherPrice:
     """The order stays at 100 in every rebuild."""
 
     def test_the_per_order_book(self):
-        book = order_book(_events(FILL_ELSEWHERE), _at(2))
-        assert book["bids"][["id", "price", "volume"]].to_dict("records") == [
+        book = order_book(_events(FILL_ELSEWHERE), at=_at(2))
+        assert book.bids[["id", "price", "volume"]].to_dict("records") == [
             {"id": 7, "price": 100, "volume": 3}
         ]
 
@@ -99,7 +99,9 @@ class TestAFillReportedAtAnotherPrice:
             (3, 8, 2.0, 98, 4, "bid", "created", 0, "resting-limit"),
             (4, 7, 3.0, 99, 0, "bid", "deleted", 3, "resting-limit"),
         ]
-        ages, _, max_rank = queue_age_grid(_events(rows), side="bid", n_time=4)
+        grid = queue_age_grid(_events(rows), side="bid", n_time=4)
+        ages = grid.to_numpy()
+        max_rank = len(grid)
         # Samples at 0, 1, 2 and 3 s: order 7 is the touch until it goes, then
         # order 8 (placed at 2 s) is.
         assert max_rank == 1
@@ -126,7 +128,9 @@ class TestAnOrderThatMoves:
         )
 
     def test_the_touch_queue_grid_follows_it(self):
-        ages, _, max_rank = queue_age_grid(_events(self.MOVED), side="bid", n_time=3)
+        grid = queue_age_grid(_events(self.MOVED), side="bid", n_time=3)
+        ages = grid.to_numpy()
+        max_rank = len(grid)
         # At 2 s the touch (101) holds order 2 (age 1 s) then order 1 (age 2 s).
         assert max_rank == 2
         assert ages[:, -1].tolist() == [1.0, 2.0]
@@ -159,8 +163,8 @@ class TestAnOrderPlacedAgain:
     ]
 
     def test_the_per_order_book(self):
-        book = order_book(_events(self.ROWS), _at(3))
-        assert book["bids"][["id", "price", "volume"]].to_dict("records") == [
+        book = order_book(_events(self.ROWS), at=_at(3))
+        assert book.bids[["id", "price", "volume"]].to_dict("records") == [
             {"id": 7, "price": 105, "volume": 4}
         ]
 
@@ -194,7 +198,9 @@ class TestAnOrderPlacedAgain:
         ]
 
     def test_placed_twice_leaves_no_copy_in_the_grid(self):
-        ages, _, max_rank = queue_age_grid(_events(self.TWICE), side="bid", n_time=5)
+        grid = queue_age_grid(_events(self.TWICE), side="bid", n_time=5)
+        ages = grid.to_numpy()
+        max_rank = len(grid)
         # Samples at 0 to 4 s.  From 3 s order 7 is gone and order 8 (placed
         # at 2 s) is the touch.
         assert max_rank == 1
@@ -217,7 +223,9 @@ class TestMarketOrdersInTheQueue:
     ]
 
     def test_the_grid_touch_is_the_resting_bid(self):
-        ages, _, max_rank = queue_age_grid(_events(self.TAKER), side="bid", n_time=4)
+        grid = queue_age_grid(_events(self.TAKER), side="bid", n_time=4)
+        ages = grid.to_numpy()
+        max_rank = len(grid)
         # Samples at 0.5, 1, 1.5 and 2 s: order 2 is the only bid on the
         # touch, until it is cancelled at 2 s.
         assert max_rank == 1
@@ -247,14 +255,16 @@ def test_grid_touch_queue_matches_the_book_on_the_bundled_sample(
     """At every sample, the grid's touch holds the book's touch orders."""
     events = sample_run_events
     placed = events[events["action"] == "created"].groupby("id")["timestamp"].first()
-    ages, times, _ = queue_age_grid(events, side=side, n_time=200)
+    grid = queue_age_grid(events, side=side, n_time=200)
+    ages = grid.to_numpy()
+    times = grid.columns
     samples = pd.DatetimeIndex(times)
     if samples.tz is None:
         samples = samples.tz_localize("UTC")
     differ = 0
     for column, t in enumerate(samples):
         book = order_book(events, at=t)
-        frame = book["bids"] if side == "bid" else book["asks"]
+        frame = book.bids if side == "bid" else book.asks
         in_book: list[float] = []
         if not frame.empty:
             touch = frame["price"].max() if side == "bid" else frame["price"].min()
@@ -279,14 +289,14 @@ class TestOneUncross:
     ]
 
     def test_order_book_evicts_the_older_bid_first(self):
-        book = order_book(_events(self.TIE), _at(10), uncross=True)
-        assert book["bids"]["id"].tolist() == [1]
-        assert book["asks"]["id"].tolist() == []
+        book = order_book(_events(self.TIE), at=_at(10), uncross=True)
+        assert book.bids["id"].tolist() == [1]
+        assert book.asks["id"].tolist() == []
 
     def test_the_book_snapshot_shows_the_uncrossed_book(self):
         from ob_analytics.visualization import prepare
 
-        book = order_book(_events(self.TIE), _at(10), uncross=True)
+        book = order_book(_events(self.TIE), at=_at(10), uncross=True)
         data = prepare.book_snapshot(book, level="L3")
         assert len(data["bids"]) == 1
         assert data["asks"].empty
@@ -302,7 +312,7 @@ class TestOneUncross:
 def test_every_rebuild_keeps_the_price_dtype(dtype):
     events = _events(FILL_ELSEWHERE)
     events["price"] = events["price"].astype(dtype)
-    assert str(order_book(events, _at(2))["bids"]["price"].dtype) == dtype
+    assert str(order_book(events, at=_at(2)).bids["price"].dtype) == dtype
     assert str(price_level_volume(events)["price"].dtype) == dtype
     assert str(resting_orders(events)["price"].dtype) == dtype
     assert str(queue_positions(events, levels="all")["price"].dtype) == dtype

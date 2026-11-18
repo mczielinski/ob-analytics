@@ -122,7 +122,10 @@ def test_result_metric_passes_settings_to_compute(result) -> None:
     frame = result.metric("vpin", bucket_volume=bucket, n_buckets=3)
 
     expected = vpin(result.trades, bucket_volume=bucket, n_buckets=3)
-    pd.testing.assert_frame_equal(frame, expected)
+    pd.testing.assert_frame_equal(frame, expected.table)
+    assert frame.attrs["bucket_volume"] == expected.bucket_volume
+    assert frame.attrs["n_buckets"] == 3
+    assert frame.attrs["diagnostics"] == expected.diagnostics
 
 
 def test_an_unknown_keyword_is_an_error(result) -> None:
@@ -137,9 +140,9 @@ def test_an_unknown_keyword_is_an_error(result) -> None:
 
 def test_kyle_metric_keeps_the_fit_in_attrs(result) -> None:
     frame = result.metric("kyle_lambda", window="5s")
-    kyle = kyle_lambda(result.trades, "5s")
+    kyle = kyle_lambda(result.trades, window="5s")
 
-    pd.testing.assert_frame_equal(frame, kyle.regression_df, check_like=True)
+    pd.testing.assert_frame_equal(frame, kyle.table, check_like=True)
     assert frame.attrs["lambda_"] == pytest.approx(kyle.lambda_, nan_ok=True)
     assert frame.attrs["n_windows"] == kyle.n_windows
     assert frame.attrs["diagnostics"] == kyle.diagnostics

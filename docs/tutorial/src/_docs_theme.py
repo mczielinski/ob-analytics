@@ -237,7 +237,7 @@ def plot_book_keyframes(
         tp = t0 + pd.Timedelta(seconds=k)
         snap = order_book(events, at=tp)
         x_max = 0.0
-        for side, color in ((snap["bids"], BID_COLOR), (snap["asks"], ASK_COLOR)):
+        for side, color in ((snap.bids, BID_COLOR), (snap.asks, ASK_COLOR)):
             lefts: dict[float, float] = {}
             for row in side.itertuples():
                 lo = lefts.get(row.price, 0.0)
@@ -265,7 +265,7 @@ def plot_book_keyframes(
                 lefts[row.price] = lo + row.volume
             if lefts:
                 x_max = max(x_max, max(lefts.values()))
-        bids, asks = snap["bids"], snap["asks"]
+        bids, asks = snap.bids, snap.asks
         if len(bids) and len(asks):
             mid = (bids["price"].max() + asks["price"].min()) / 2
             axk.axhline(mid, color="#222222", ls="--", lw=1.1)

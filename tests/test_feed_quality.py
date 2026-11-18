@@ -149,16 +149,16 @@ class TestUncrossOrderBook:
         te = _classified_toy()
         faithful = order_book(te, uncross=False)
         display = order_book(te, uncross=True)
-        assert faithful["bids"].equals(display["bids"])
-        assert faithful["asks"].equals(display["asks"])
+        assert faithful.bids.equals(display.bids)
+        assert faithful.asks.equals(display.asks)
 
     def test_default_is_faithfully_crossed(self):
         book = order_book(crossed_events(), uncross=False)
-        assert book["bids"]["price"].max() > book["asks"]["price"].min()
+        assert book.bids["price"].max() > book.asks["price"].min()
 
     def test_uncross_yields_uncrossed(self):
         book = order_book(crossed_events(), uncross=True)
-        bids, asks = book["bids"], book["asks"]
+        bids, asks = book.bids, book.asks
         # The non-crossing bid and the fresh ask survive the uncross.
         assert not bids.empty and not asks.empty
         assert bids["price"].max() < asks["price"].min()
@@ -167,21 +167,23 @@ class TestUncrossOrderBook:
         # The bid@100 (t=0) is older than the ask@99 (t=10); the fresher ask
         # wins, so the stale crossing bid is evicted while the ask survives.
         book = order_book(crossed_events(), uncross=True)
-        assert 1 not in set(book["bids"]["id"])  # stale bid evicted
-        assert 2 in set(book["asks"]["id"])  # fresh ask kept
-        assert 3 in set(book["bids"]["id"])  # non-crossing bid kept
+        assert 1 not in set(book.bids["id"])  # stale bid evicted
+        assert 2 in set(book.asks["id"])  # fresh ask kept
+        assert 3 in set(book.bids["id"])  # non-crossing bid kept
 
     def test_uncross_is_a_subset(self):
         faithful = order_book(crossed_events(), uncross=False)
         display = order_book(crossed_events(), uncross=True)
         for side in ("bids", "asks"):
-            assert set(display[side]["id"]) <= set(faithful[side]["id"])
+            assert set(getattr(display, side)["id"]) <= set(
+                getattr(faithful, side)["id"]
+            )
 
     def test_uncross_recomputes_liquidity(self):
         # After eviction, liquidity is the cumulative volume of the survivors.
         book = order_book(crossed_events(), uncross=True)
         for side in ("bids", "asks"):
-            frame = book[side]
+            frame = getattr(book, side)
             if not frame.empty:
                 np.testing.assert_allclose(
                     frame["liquidity"].to_numpy(),
@@ -191,8 +193,8 @@ class TestUncrossOrderBook:
     def test_toy_touch_regression(self):
         # Concrete anchor that the faithful default is unchanged by the param.
         book = order_book(_classified_toy(), uncross=False)
-        assert book["bids"]["price"].max() == 99.0
-        assert book["asks"]["price"].min() == 102.0
+        assert book.bids["price"].max() == 99.0
+        assert book.asks["price"].min() == 102.0
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +240,8 @@ class TestFaithfulBestSeries:
         series = _faithful_best_series(depth).sort_values("timestamp")
         for tp in sorted(events["timestamp"].unique()):
             book = order_book(events, at=pd.Timestamp(tp), uncross=False)
-            exp_bid = book["bids"]["price"].max() if not book["bids"].empty else np.nan
-            exp_ask = book["asks"]["price"].min() if not book["asks"].empty else np.nan
+            exp_bid = book.bids["price"].max() if not book.bids.empty else np.nan
+            exp_ask = book.asks["price"].min() if not book.asks.empty else np.nan
             at_tp = series[series["timestamp"] <= tp]
             got_bid = at_tp["best_bid"].iloc[-1]
             got_ask = at_tp["best_ask"].iloc[-1]
@@ -1045,8 +1047,8 @@ class TestStaleOrders:
         before = order_book(events)
         detect_stale_orders(events, _through_trade())
         after = order_book(events)
-        assert 2 in set(after["asks"]["id"])
-        assert before["asks"].equals(after["asks"])
+        assert 2 in set(after.asks["id"])
+        assert before.asks.equals(after.asks)
 
 
 @pytest.fixture(scope="module")
@@ -1380,7 +1382,7 @@ class TestUncrossProperties:
     def test_uncross_never_leaves_a_cross(self, orders):
         ev = _resting_book_events(orders)
         book = order_book(ev, uncross=True)
-        bids, asks = book["bids"], book["asks"]
+        bids, asks = book.bids, book.asks
         if not bids.empty and not asks.empty:
             assert bids["price"].max() < asks["price"].min()
 
@@ -1391,20 +1393,22 @@ class TestUncrossProperties:
         faithful = order_book(ev, uncross=False)
         display = order_book(ev, uncross=True)
         for side in ("bids", "asks"):
-            assert set(display[side]["id"]) <= set(faithful[side]["id"])
+            assert set(getattr(display, side)["id"]) <= set(
+                getattr(faithful, side)["id"]
+            )
 
     @settings(max_examples=200, deadline=None)
     @given(orders=_orders)
     def test_uncross_is_idempotent_when_already_uncrossed(self, orders):
         ev = _resting_book_events(orders)
         faithful = order_book(ev, uncross=False)
-        if faithful["bids"].empty or faithful["asks"].empty:
+        if faithful.bids.empty or faithful.asks.empty:
             return
-        if faithful["bids"]["price"].max() < faithful["asks"]["price"].min():
+        if faithful.bids["price"].max() < faithful.asks["price"].min():
             # An already-uncrossed book must be returned untouched.
             display = order_book(ev, uncross=True)
-            assert faithful["bids"].equals(display["bids"])
-            assert faithful["asks"].equals(display["asks"])
+            assert faithful.bids.equals(display.bids)
+            assert faithful.asks.equals(display.asks)
 
 
 def _classified_toy() -> pd.DataFrame:

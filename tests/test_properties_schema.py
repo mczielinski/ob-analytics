@@ -170,7 +170,7 @@ def test_depth_engine_emits_in_time_order(cfg: SynthConfig) -> None:
 @given(events=crossable_events())
 def test_order_book_uncross_leaves_no_cross(events: pd.DataFrame) -> None:
     book = order_book(events, uncross=True)
-    bids, asks = book["bids"], book["asks"]
+    bids, asks = book.bids, book.asks
     if not bids.empty and not asks.empty:
         assert bids["price"].max() < asks["price"].min()
 
@@ -219,7 +219,7 @@ def test_uncross_resolves_a_known_crossed_book() -> None:
     ).sort_values("timestamp", kind="stable")
     events["exchange_timestamp"] = events["timestamp"]
     book = order_book(events, at=_T0 + pd.Timedelta(seconds=10), uncross=True)
-    assert book["bids"]["price"].max() < book["asks"]["price"].min()
+    assert book.bids["price"].max() < book.asks["price"].min()
 
 
 # ── Rule 3: volume adds up ───────────────────────────────────────────────────

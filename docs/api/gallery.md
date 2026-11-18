@@ -54,7 +54,7 @@ from ob_analytics.visualization.gallery import (
 )
 
 result = Pipeline().run(sample_csv_path())
-vpin_df = vpin(result.trades)
+fit = vpin(result.trades)
 
 model = build_gallery_model(result)
 model.analytics.append(
@@ -63,7 +63,7 @@ model.analytics.append(
         title="VPIN (alert at 0.8)",
         plot_name="vpin",
         prepare=prepare.vpin,
-        prep_kwargs={"vpin_df": vpin_df, "threshold": 0.8},
+        prep_kwargs={"vpin_result": fit, "threshold": 0.8},
     )
 )
 generate_gallery(result, "out/gallery", model=model)

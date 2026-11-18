@@ -28,7 +28,7 @@ import pandas as pd
 
 from ob_analytics import toy_events, toy_trades
 from ob_analytics.analytics import set_order_types
-from ob_analytics.book import order_book
+from ob_analytics.book import BookSnapshot, order_book
 from ob_analytics.visualization import plot, prepare
 
 events = set_order_types(toy_events(), toy_trades())
@@ -69,18 +69,18 @@ fig.tight_layout()
 # both resolutions:
 
 # %%
-whale = {
-    "timestamp": t30,
-    "bids": pd.DataFrame({"id": [1], "price": [99.0], "volume": [4.0]}).iloc[:0],
-    "asks": pd.DataFrame({"id": [10], "price": [101.0], "volume": [4.0]}),
-}
-crowd = {
-    "timestamp": t30,
-    "bids": whale["bids"],
-    "asks": pd.DataFrame(
+whale = BookSnapshot(
+    timestamp=t30,
+    bids=pd.DataFrame({"id": [1], "price": [99.0], "volume": [4.0]}).iloc[:0],
+    asks=pd.DataFrame({"id": [10], "price": [101.0], "volume": [4.0]}),
+)
+crowd = BookSnapshot(
+    timestamp=t30,
+    bids=whale.bids,
+    asks=pd.DataFrame(
         {"id": [21, 22, 23, 24], "price": [101.0] * 4, "volume": [1.0] * 4}
     ),
-}
+)
 
 fig, axes = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=True)
 for col, (name, book) in enumerate([("one whale", whale), ("a crowd", crowd)]):

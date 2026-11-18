@@ -59,6 +59,7 @@ from ob_analytics.depth import _quoted, book_signals, get_spread, imbalance_leve
 from ob_analytics.flow_toxicity import (
     OFI_WINDOWS,
     KyleLambdaResult,
+    VpinResult,
     _ofi_windows,
     kyle_lambda,
     ofi_by_window,
@@ -291,7 +292,13 @@ class L1TickerMetric:
 
 
 class VpinMetric:
-    """VPIN, from :func:`~ob_analytics.flow_toxicity.vpin`."""
+    """VPIN, from :func:`~ob_analytics.flow_toxicity.vpin`.
+
+    The table is the per-bucket table.  The rest of the result is in the
+    table's ``attrs``: ``bucket_volume``, ``bucket_volume_rule``,
+    ``n_buckets`` and ``diagnostics``, as on
+    :class:`~ob_analytics.flow_toxicity.VpinResult`.
+    """
 
     name = "vpin"
     title = "VPIN"
@@ -311,13 +318,21 @@ class VpinMetric:
         *bucket_volume* is in the instrument's own units, as
         ``vpin`` takes it, or ``"fit"`` to size it to the capture.
         """
-        return vpin(
+        fit = vpin(
             result.trades,
             bucket_volume=bucket_volume,
             n_buckets=n_buckets,
             sign_method=sign_method,
             quotes=result.depth_summary,
         )
+        frame = fit.table.copy()
+        frame.attrs.update(
+            bucket_volume=fit.bucket_volume,
+            bucket_volume_rule=fit.bucket_volume_rule,
+            n_buckets=fit.n_buckets,
+            diagnostics=fit.diagnostics,
+        )
+        return frame
 
     def prepare(
         self,
@@ -334,9 +349,18 @@ class VpinMetric:
         """
         from ob_analytics.visualization._data import prepare_vpin_data
 
+        # The face draws from the table alone; the settings only add the note
+        # under the card, so a table that lost its attrs still draws.
+        settings = frame.attrs
+        fit = VpinResult(
+            table=frame,
+            bucket_volume=settings.get("bucket_volume", float("nan")),
+            bucket_volume_rule=settings.get("bucket_volume_rule", "given"),
+            n_buckets=settings.get("n_buckets", len(frame)),
+        )
         if min_trades is None:
-            return prepare_vpin_data(frame, threshold=threshold)
-        return prepare_vpin_data(frame, threshold=threshold, min_trades=min_trades)
+            return prepare_vpin_data(fit, threshold=threshold)
+        return prepare_vpin_data(fit, threshold=threshold, min_trades=min_trades)
 
 
 class KyleLambdaMetric:
@@ -366,14 +390,14 @@ class KyleLambdaMetric:
         """Return the regression table; the settings are ``kyle_lambda``'s."""
         kyle = kyle_lambda(
             result.trades,
-            window,
+            window=window,
             sign_method=sign_method,
             quotes=result.depth_summary,
             n_boot=n_boot,
             ci_level=ci_level,
             seed=seed,
         )
-        frame = kyle.regression_df.copy()
+        frame = kyle.table.copy()
         frame.attrs.update(
             lambda_=kyle.lambda_,
             t_stat=kyle.t_stat,
@@ -397,7 +421,7 @@ class KyleLambdaMetric:
                 t_stat=fit["t_stat"],
                 r_squared=fit["r_squared"],
                 n_windows=fit["n_windows"],
-                regression_df=frame,
+                table=frame,
                 ci_low=fit["ci_low"],
                 ci_high=fit["ci_high"],
                 ci_level=fit["ci_level"],

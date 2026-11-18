@@ -532,7 +532,7 @@ class TestPriceLevelSnapshots:
         times = depth["timestamp"].drop_duplicates()
         for t, snap in zip(times, price_level_snapshots(depth, times), strict=True):
             row = summary[summary["timestamp"] <= t].iloc[-1]
-            bids, asks = snap["bids"], snap["asks"]
+            bids, asks = snap.bids, snap.asks
             assert (bids["price"].iloc[0] if len(bids) else 0) == row["best_bid_price"]
             assert (bids["volume"].iloc[0] if len(bids) else 0) == row["best_bid_vol"]
             assert (asks["price"].iloc[-1] if len(asks) else 0) == row["best_ask_price"]
@@ -553,16 +553,16 @@ class TestPriceLevelSnapshots:
         )
         (snap,) = price_level_snapshots(depth, [t])
         last = summarize_depth(depth).iloc[-1]
-        assert snap["bids"]["price"].tolist() == [last["best_bid_price"]] == [100]
-        assert snap["asks"].empty and last["best_ask_price"] == 0
+        assert snap.bids["price"].tolist() == [last["best_bid_price"]] == [100]
+        assert snap.asks.empty and last["best_ask_price"] == 0
 
     def test_crossed_level_is_left_out(self):
         depth = _replay_depth()
         (snap,) = price_level_snapshots(depth, [pd.Timestamp("2026-01-01 00:00:04Z")])
-        assert snap["bids"]["price"].tolist() == [100]
+        assert snap.bids["price"].tolist() == [100]
         # order_book's convention: asks best last.
-        assert snap["asks"]["price"].tolist() == [104, 103, 101]
-        assert snap["asks"]["liquidity"].tolist() == [8, 7, 3]
+        assert snap.asks["price"].tolist() == [104, 103, 101]
+        assert snap.asks["liquidity"].tolist() == [8, 7, 3]
 
     def test_keeps_the_order_of_times_and_their_units(self):
         depth = _replay_depth()
@@ -571,17 +571,17 @@ class TestPriceLevelSnapshots:
             pd.Timestamp("2026-01-01 00:00:02Z"),
         ]
         late, early = price_level_snapshots(depth, times)
-        assert late["timestamp"] == times[0] and early["timestamp"] == times[1]
-        assert early["bids"]["price"].tolist() == [102, 100]
-        assert late["bids"]["price"].tolist() == []
-        assert early["bids"]["volume"].dtype == depth["volume"].dtype
+        assert late.timestamp == times[0] and early.timestamp == times[1]
+        assert early.bids["price"].tolist() == [102, 100]
+        assert late.bids["price"].tolist() == []
+        assert early.bids["volume"].dtype == depth["volume"].dtype
 
     def test_max_levels(self):
         depth = _replay_depth()
         (snap,) = price_level_snapshots(
             depth, [pd.Timestamp("2026-01-01 00:00:04Z")], max_levels=2
         )
-        assert snap["asks"]["price"].tolist() == [103, 101]
+        assert snap.asks["price"].tolist() == [103, 101]
 
     def test_naive_instant_on_aware_table_is_refused(self):
         with pytest.raises(TypeError, match="tz-naive"):

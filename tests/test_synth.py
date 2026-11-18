@@ -138,7 +138,7 @@ def test_runs_through_full_pipeline():
 def test_order_book_reconstruction_is_uncrossed():
     events = _session().events
     snapshot = order_book(events, uncross=False)
-    bids, asks = snapshot["bids"], snapshot["asks"]
+    bids, asks = snapshot.bids, snapshot.asks
     if not bids.empty and not asks.empty:
         assert bids["price"].max() < asks["price"].min()
     # No duplicate active order ids (order_book raises otherwise).

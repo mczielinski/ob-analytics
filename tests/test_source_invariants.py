@@ -193,8 +193,8 @@ def _book_levels_at(
     """The per-order book at *at*, summed by price level."""
     book = order_book(events, at=at)
     levels: dict[tuple[str, int], int] = {}
-    for side, direction in (("bids", "bid"), ("asks", "ask")):
-        for price, volume in zip(book[side]["price"], book[side]["volume"]):
+    for frame, direction in ((book.bids, "bid"), (book.asks, "ask")):
+        for price, volume in zip(frame["price"], frame["volume"]):
             key = (direction, int(price))
             levels[key] = levels.get(key, 0) + int(volume)
     return levels

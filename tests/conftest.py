@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.book import BookSnapshot
+
 SAMPLE_CSV = (
     Path(__file__).resolve().parent.parent
     / "ob_analytics"
@@ -1020,13 +1022,19 @@ def plot_hidden_executions() -> pd.DataFrame:
 
 
 @pytest.fixture
-def plot_order_book() -> dict:
+def plot_order_book() -> BookSnapshot:
     """A book of two bid and two ask levels: price, size, cumulative size."""
-    return {
-        "timestamp": 1430445600,
-        "bids": np.array([[236.50, 100, 100], [236.00, 200, 300]]),
-        "asks": np.array([[237.00, 150, 150], [237.50, 250, 400]]),
-    }
+    return BookSnapshot(
+        timestamp=pd.Timestamp(1430445600, unit="s"),
+        bids=pd.DataFrame(
+            [[236.50, 100, 100], [236.00, 200, 300]],
+            columns=["price", "volume", "liquidity"],
+        ),
+        asks=pd.DataFrame(
+            [[237.00, 150, 150], [237.50, 250, 400]],
+            columns=["price", "volume", "liquidity"],
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

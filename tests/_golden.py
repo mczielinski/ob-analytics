@@ -20,11 +20,12 @@ pytest does not collect it.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from ob_analytics.book import BookSnapshot
 
 
 def df_fingerprint(df: pd.DataFrame | None) -> str:
@@ -56,7 +57,7 @@ def df_fingerprint(df: pd.DataFrame | None) -> str:
     return h.hexdigest()
 
 
-def book_fingerprint(book: Mapping[str, Any]) -> str:
+def book_fingerprint(book: BookSnapshot) -> str:
     """Return a stable content hash of an ``order_book`` snapshot.
 
     Combines the ``bids`` and ``asks`` frame fingerprints, so one value locks
@@ -64,7 +65,7 @@ def book_fingerprint(book: Mapping[str, Any]) -> str:
 
     Parameters
     ----------
-    book : collections.abc.Mapping
+    book : ob_analytics.book.BookSnapshot
         An :func:`~ob_analytics.book.order_book` result, carrying ``bids``
         and ``asks`` DataFrames.
 
@@ -73,7 +74,7 @@ def book_fingerprint(book: Mapping[str, Any]) -> str:
     str
         ``"<bids-digest>:<asks-digest>"``.
     """
-    return f"{df_fingerprint(book['bids'])}:{df_fingerprint(book['asks'])}"
+    return f"{df_fingerprint(book.bids)}:{df_fingerprint(book.asks)}"
 
 
 def assert_same_result(back: Any, result: Any) -> None:

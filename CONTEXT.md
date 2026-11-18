@@ -327,7 +327,8 @@ trailing windows at once. `order_flow_imbalance` names its column `ofi`;
 **VPIN**:
 Volume-synchronized probability of informed trading: trades put in buckets of
 equal volume, and the rolling absolute buy-sell imbalance across them.
-Computed by `vpin`, with `vpin_bucket_volume` for the usual bucket size.
+Computed by `vpin`, which returns a `VpinResult`, with `vpin_bucket_volume`
+for the usual bucket size.
 
 **Kyle's lambda**:
 The slope of price change against signed volume over a rolling window: the

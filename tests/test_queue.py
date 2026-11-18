@@ -191,12 +191,12 @@ class TestQueueAgeGrid:
     ]
 
     def test_shape_and_per_rank_age(self) -> None:
-        ages, times, mr = queue_age_grid(
-            _events(self.GRID_EVENTS), side="bid", n_time=5
-        )
-        assert mr == 2  # deepest the bid queue gets is 2
+        grid = queue_age_grid(_events(self.GRID_EVENTS), side="bid", n_time=5)
+        ages = grid.to_numpy()
+        assert len(grid) == 2  # deepest the bid queue gets is 2
+        assert grid.index.name == "rank" and grid.index.tolist() == [1, 2]
         assert ages.shape == (2, 5)
-        assert len(times) == 5
+        assert len(grid.columns) == 5
         # samples at t=0,5,10,15,20. At t=10 both rest: front(A)=10s, back(B)=0s.
         assert ages[0, 2] == 10.0
         assert ages[1, 2] == 0.0
@@ -204,7 +204,8 @@ class TestQueueAgeGrid:
         assert ages[0, 3] > ages[1, 3]
 
     def test_front_is_row_zero_nan_when_short(self) -> None:
-        ages, _, _ = queue_age_grid(_events(self.GRID_EVENTS), side="bid", n_time=5)
+        grid = queue_age_grid(_events(self.GRID_EVENTS), side="bid", n_time=5)
+        ages = grid.to_numpy()
         # at t=0 only A rests -> rank 2 (row 1) is empty.
         assert np.isfinite(ages[0, 0])
         assert np.isnan(ages[1, 0])
@@ -223,7 +224,9 @@ class TestQueueAgeGrid:
                 }
             ]
         )
-        ages, _, mr = queue_age_grid(ev, side="bid", n_time=5)
+        grid = queue_age_grid(ev, side="bid", n_time=5)
+        ages = grid.to_numpy()
+        mr = len(grid)
         assert mr == 0 and ages.size == 0
 
     def test_empty_events_name_l3(self) -> None:

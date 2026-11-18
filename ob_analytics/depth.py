@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Iterable
 from datetime import datetime
 from functools import lru_cache
-from typing import TYPE_CHECKING, NamedTuple
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -29,12 +29,10 @@ from ob_analytics._utils import (
     size_to_lots,
     validate_non_empty,
 )
+from ob_analytics.book import BookSnapshot
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import time_order_keys, validate_columns
-
-if TYPE_CHECKING:
-    from ob_analytics.book import BookSnapshot
 
 __all__ = [
     "BookLevels",
@@ -1074,6 +1072,7 @@ def summarize_depth(
 def price_level_snapshots(
     depth: pd.DataFrame,
     times: Iterable[datetime | pd.Timestamp],
+    *,
     max_levels: int | None = None,
 ) -> list[BookSnapshot]:
     """Return the book at L2 at each of *times*, replayed from the depth table.
@@ -1156,14 +1155,14 @@ def price_level_snapshots(
         ask_prices, ask_volumes = book.quoted_asks()
         bids = side_frame(bid_prices[::-1][:max_levels], bid_volumes[::-1][:max_levels])
         asks = side_frame(ask_prices[:max_levels], ask_volumes[:max_levels])
-        snapshots[k] = {
-            "timestamp": _engine_frames.timestamps(
+        snapshots[k] = BookSnapshot(
+            timestamp=_engine_frames.timestamps(
                 np.array([instants[k]]), like=depth["timestamp"]
             )[0],
-            "bids": bids,
+            bids=bids,
             # order_book's convention: asks best last.
-            "asks": asks.iloc[::-1].reset_index(drop=True),
-        }
+            asks=asks.iloc[::-1].reset_index(drop=True),
+        )
     return [s for s in snapshots if s is not None]
 
 

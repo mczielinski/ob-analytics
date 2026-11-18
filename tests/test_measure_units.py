@@ -52,7 +52,7 @@ def _quiet():
 
 def _kyle(run: PipelineResult) -> pd.DataFrame:
     fit = kyle_lambda(run.trades, quotes=run.depth_summary)
-    return fit.regression_df.assign(lambda_=fit.lambda_)
+    return fit.table.assign(lambda_=fit.lambda_)
 
 
 def _ofi(run: PipelineResult) -> pd.DataFrame:
@@ -69,7 +69,7 @@ def _l1(run: PipelineResult) -> pd.DataFrame:
 BARE: dict[str, Callable[[PipelineResult], pd.DataFrame]] = {
     "l1_ticker": _l1,
     "book_signals": lambda run: book_signals(run.depth_summary),
-    "vpin": lambda run: vpin(run.trades, quotes=run.depth_summary),
+    "vpin": lambda run: vpin(run.trades, quotes=run.depth_summary).table,
     "kyle_lambda": _kyle,
     "order_flow_imbalance": _ofi,
     "ofi_by_window": lambda run: ofi_by_window(run.trades, quotes=run.depth_summary),

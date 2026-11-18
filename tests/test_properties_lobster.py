@@ -186,7 +186,7 @@ def test_order_book_matches_surviving_outstanding(
     survivors = (placed - consumed.reindex(placed.index).fillna(0)).loc[lambda s: s > 0]
 
     book = order_book(events)
-    book_orders = pd.concat([book["bids"], book["asks"]]).set_index("id")["volume"]
+    book_orders = pd.concat([book.bids, book.asks]).set_index("id")["volume"]
 
     assert set(book_orders.index) == set(survivors.index)
     if len(survivors):
@@ -195,5 +195,5 @@ def test_order_book_matches_surviving_outstanding(
             survivors.sort_index().astype(float),
             check_names=False,
         )
-    if not book["bids"].empty and not book["asks"].empty:
-        assert book["bids"].iloc[0]["price"] <= book["asks"].iloc[-1]["price"]
+    if not book.bids.empty and not book.asks.empty:
+        assert book.bids.iloc[0]["price"] <= book.asks.iloc[-1]["price"]

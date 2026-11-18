@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 from matplotlib.text import Text
 
+from ob_analytics.flow_toxicity import VpinResult
 from ob_analytics.metrics import get_metric
 from ob_analytics.visualization import plot, prepare
 from ob_analytics.visualization._data import MIN_TRADES
@@ -150,15 +151,18 @@ class TestOneWindowIsANumber:
 # ── VPIN: enough trades per bucket ───────────────────────────────────
 
 
-def _vpin(n_trades: list[int]) -> pd.DataFrame:
+def _vpin(n_trades: list[int]) -> VpinResult:
     n = len(n_trades)
-    return pd.DataFrame(
+    table = pd.DataFrame(
         {
             "timestamp_end": pd.date_range("2020-01-01", periods=n, freq="1min"),
             "n_trades": n_trades,
             "vpin": np.linspace(0.2, 0.6, n),
             "vpin_avg": np.linspace(0.2, 0.4, n),
         }
+    )
+    return VpinResult(
+        table=table, bucket_volume=1.0, bucket_volume_rule="given", n_buckets=n
     )
 
 

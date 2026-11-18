@@ -117,9 +117,18 @@ def queue_positions(
     return _engine_frames.queue_frame(ev, positions)
 
 
-def _empty_age_grid() -> tuple[np.ndarray, np.ndarray, int]:
+def _age_table(ages: np.ndarray, times: pd.DatetimeIndex) -> pd.DataFrame:
+    """The :func:`queue_age_grid` table: one row per rank, one column per instant."""
+    return pd.DataFrame(
+        ages.reshape(len(ages), len(times)),
+        index=pd.RangeIndex(1, len(ages) + 1, name="rank"),
+        columns=times.rename("timestamp"),
+    )
+
+
+def _empty_age_grid() -> pd.DataFrame:
     """What :func:`queue_age_grid` returns when no order is queued."""
-    return np.empty((0, 0)), np.array([], dtype="datetime64[ns]"), 0
+    return _age_table(np.empty((0, 0)), pd.DatetimeIndex([]))
 
 
 def queue_age_grid(
@@ -127,12 +136,12 @@ def queue_age_grid(
     *,
     side: str = "bid",
     n_time: int = 200,
-) -> tuple[np.ndarray, np.ndarray, int]:
+) -> pd.DataFrame:
     """Touch-queue composition over time: the age of the order at each rank.
 
     Replays one side's events and snapshots its touch (best) level at *n_time*
     evenly spaced instants, recording each resting order's age by FIFO rank.
-    The grid feeds the ``liquidity_at_touch`` L3 composition strip (a
+    The table feeds the ``liquidity_at_touch`` L3 composition strip (a
     ``pcolormesh``/``Heatmap`` of age over time x rank).
 
     Parameters
@@ -148,12 +157,14 @@ def queue_age_grid(
 
     Returns
     -------
-    (ages, times, max_rank)
-        ``ages`` is a ``(max_rank, n_time)`` float array: ``ages[r, t]`` is the
-        age in **seconds** of the order at rank ``r + 1`` (front = row 0) at
-        sample ``t``, or ``NaN`` where the queue is shorter than ``r + 1``.
-        ``times`` is the length-``n_time`` array of sample timestamps.
-        Visible-only (hidden orders and market orders absent).
+    pandas.DataFrame
+        One row per queue rank and one column per sample instant.  The index
+        is ``rank``, 1-based from the front of the queue, up to the longest
+        queue seen.  The columns are the *n_time* sample timestamps.  Each
+        cell is the age in **seconds** of the order at that rank at that
+        instant, or ``NaN`` where the queue is shorter.  Visible orders only:
+        hidden orders and market orders are absent.  When no order is queued,
+        the table has no rows.
     """
     if side not in ("bid", "ask"):
         raise ConfigError(f"side must be 'bid' or 'ask', got {side!r}")
@@ -175,4 +186,4 @@ def queue_age_grid(
         periods=n_time,
     )
     grid = engine.queue_age_grid(arrays, side=touch, at=epoch_ns(samples))
-    return grid.ages, samples.to_numpy(), grid.max_rank
+    return _age_table(grid.ages, samples)
