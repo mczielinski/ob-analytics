@@ -237,9 +237,10 @@ def step_for(value: float, step: float | None) -> float | None:
     """
     if step is None:
         return None
-    while step > FINEST_STEP and off_tick_grid(value, step):
-        step = round(step / 10, 12)
-    return step
+    current: float = step
+    while current > FINEST_STEP and off_tick_grid(value, current):
+        current = round(current / 10, 12)
+    return current
 
 
 # ---------------------------------------------------------------------------

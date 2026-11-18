@@ -2747,7 +2747,7 @@ def _horizon_bands(ofi: np.ndarray) -> dict[str, Any]:
     return {
         "band_alphas": tuple(0.25 + 0.25 * b for b in range(n)),
         "buy_bands": fill(value),
-        "sell_bands": fill(-value),
+        "sell_bands": fill(np.negative(value)),
     }
 
 
