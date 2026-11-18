@@ -1528,7 +1528,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 - **The matplotlib queue-position face draws in about 1 s, not 25 s** (#539).
   It drew one line for each order. It now draws one line collection for
-  each fate, with one path for each order, so the picture is the same.
+  each fate, with one path for each order. The paths keep the line caps and
+  joins of the old lines, so the picture is the same, pixel for pixel.
 - **The Plotly bars card titles its volume axis "Volume"** (#504). It was
   titled "Price", like the price axis.
 - **The order flow imbalance and VPIN cards count taker orders** (#532).

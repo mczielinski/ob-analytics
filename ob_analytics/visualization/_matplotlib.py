@@ -1163,6 +1163,11 @@ def mpl_queue_position_per_order(
                 colors=color,
                 alpha=0.5,
                 linewidths=1.0,
+                # A collection draws butt caps by default, but a line takes its
+                # caps and joins from rcParams.  Take them from there too, so
+                # line ends and corners draw as one line per order drew them.
+                capstyle=mpl.rcParams["lines.solid_capstyle"],
+                joinstyle=mpl.rcParams["lines.solid_joinstyle"],
             )
         )
         ax.autoscale_view()
