@@ -3,10 +3,9 @@
 A plot is a coordinate ``(concept, level, backend)``: what it shows, at which
 resolution (``Level.L2``, ``Level.L3``, or ``None`` for a level-less
 analytic), and which library draws it.  :data:`CONCEPTS` declares each
-concept once: its gallery title and note, and at each level the renderer
-that draws it, the backends that have that renderer, the data it needs, and
-how the gallery binds that data from a run.  :data:`PLOTS` is the same
-table keyed by the coordinate.
+concept once: its gallery title and note, and at each level the backends
+that draw it, the data it needs, and how the gallery binds that data from a
+run.  :data:`PLOTS` is the same table keyed by the coordinate.
 
 An L2 face needs only aggregated data: the depth table, the depth summary
 and the trades.  So every L2 face draws on a price-level run, and on a
@@ -17,15 +16,10 @@ The gallery, :func:`~ob_analytics.visualization.plot_result` and
 :func:`~ob_analytics.visualization.plot` read this table to know where a plot
 is drawn, so a backend a plot does not have is a declared fact (the book
 replay is Plotly only) rather than a missing registration.  The backend
-modules only draw: each calls :func:`register_backend` once, which registers
-the backend's function for every coordinate the table gives it.
-
-A renderer is named after its backend and its face: the L2 trade tape face,
-``"trade_tape_aggregate"``, is ``mpl_trade_tape_aggregate`` in the matplotlib
-module, ``plotly_trade_tape_aggregate`` in the plotly module and
-``bokeh_trade_tape_aggregate`` in the bokeh module.  A concept drawn at both
-levels names its faces ``<concept>_aggregate`` (L2) and ``<concept>_per_order``
-(L3); a concept drawn at one level names its face after the concept.
+modules only draw: each marks its renderers with
+:func:`~ob_analytics.visualization._renderers.renders`, which registers a
+function at its coordinate when the module is imported.  A test checks that
+the built-in backends register exactly the coordinates of this table.
 
 A plot registered straight into :data:`~ob_analytics.visualization.RENDERERS`
 by another package (a plug-in plot or backend) is not in this table.
@@ -55,14 +49,10 @@ from ob_analytics.visualization._renderers import (
 
 L2, L3 = Level.L2, Level.L3
 
-#: The prefix of a renderer's function name in each built-in backend module.
-BACKEND_PREFIXES: dict[str, str] = {
-    "matplotlib": "mpl",
-    "plotly": "plotly",
-    "bokeh": "bokeh",
-}
+#: The backends this package ships.
+BUILTIN_BACKENDS: tuple[str, ...] = ("matplotlib", "plotly", "bokeh")
 
-_ALL = ("matplotlib", "plotly", "bokeh")
+_ALL = BUILTIN_BACKENDS
 _MPL_PLOTLY = ("matplotlib", "plotly")
 _PLOTLY = ("plotly",)
 
@@ -256,9 +246,6 @@ class Face:
 
     Attributes
     ----------
-    renderer : str
-        The renderer's name without its backend prefix (see
-        :data:`BACKEND_PREFIXES`), e.g. ``"trade_tape_aggregate"`` for ``mpl_trade_tape_aggregate``.
     backends : tuple of str
         The backends that draw this face.
     needs : Needs or None
@@ -270,7 +257,6 @@ class Face:
         :func:`~ob_analytics.visualization.plot`.
     """
 
-    renderer: str
     backends: tuple[str, ...]
     needs: Needs | None = None
     bind: Binder | None = None
@@ -278,8 +264,7 @@ class Face:
     def __post_init__(self) -> None:
         if (self.needs is None) != (self.bind is None):
             raise ConfigError(
-                f"Face {self.renderer!r} declares needs without a binder, or a "
-                "binder without needs."
+                "A face declares needs without a binder, or a binder without needs."
             )
 
 
@@ -516,9 +501,8 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "trade_tape",
         {
-            L2: Face("trade_tape_aggregate", _ALL, Needs(("trades",)), _trade_tape_l2),
+            L2: Face(_ALL, Needs(("trades",)), _trade_tape_l2),
             L3: Face(
-                "trade_tape_per_order",
                 _ALL,
                 Needs(("events", "trades")),
                 _trade_tape_l3,
@@ -533,7 +517,6 @@ CONCEPTS: tuple[Concept, ...] = (
         "depth_heatmap",
         {
             L2: Face(
-                "depth_heatmap",
                 _ALL,
                 Needs(("depth",), uses=("trades",)),
                 _depth_heatmap,
@@ -552,13 +535,11 @@ CONCEPTS: tuple[Concept, ...] = (
         "order_activity",
         {
             L2: Face(
-                "order_activity_aggregate",
                 _MPL_PLOTLY,
                 Needs(("depth",)),
                 _order_activity_l2,
             ),
             L3: Face(
-                "order_activity_per_order",
                 _MPL_PLOTLY,
                 Needs(("events",), classified=True),
                 _order_activity_l3,
@@ -576,7 +557,6 @@ CONCEPTS: tuple[Concept, ...] = (
         "cancellations",
         {
             L3: Face(
-                "cancellations_per_order",
                 _MPL_PLOTLY,
                 Needs(("events",), classified=True, columns=("aggressiveness_bps",)),
                 _cancellations_l3,
@@ -590,8 +570,8 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "book_snapshot",
         {
-            L2: Face("book_snapshot_aggregate", _ALL, _BOOK_L2, _book(L2)),
-            L3: Face("book_snapshot_per_order", _ALL, _BOOK_L3, _book(L3)),
+            L2: Face(_ALL, _BOOK_L2, _book(L2)),
+            L3: Face(_ALL, _BOOK_L3, _book(L3)),
         },
         "Book Snapshot ({snapshot})",
         "The resting book at one instant. L2: total size per price level, "
@@ -602,8 +582,8 @@ CONCEPTS: tuple[Concept, ...] = (
     Concept(
         "depth_chart",
         {
-            L2: Face("depth_chart_aggregate", _ALL, _BOOK_L2, _book(L2)),
-            L3: Face("depth_chart_per_order", _ALL, _BOOK_L3, _book(L3)),
+            L2: Face(_ALL, _BOOK_L2, _book(L2)),
+            L3: Face(_ALL, _BOOK_L3, _book(L3)),
         },
         "Depth Chart ({snapshot})",
         "Cumulative size from the touch outwards: how far the price moves to "
@@ -614,13 +594,11 @@ CONCEPTS: tuple[Concept, ...] = (
         "book_replay",
         {
             L2: Face(
-                "book_replay_aggregate",
                 _PLOTLY,
                 Needs(("depth",), uses=("trades", "events")),
                 _book_replay(L2),
             ),
             L3: Face(
-                "book_replay_per_order",
                 _PLOTLY,
                 Needs(("depth", "events"), uses=("trades",), classified=True),
                 _book_replay(L3),
@@ -638,7 +616,6 @@ CONCEPTS: tuple[Concept, ...] = (
         "order_outcome",
         {
             L3: Face(
-                "order_outcome_per_order",
                 _MPL_PLOTLY,
                 Needs(("events",), columns=("aggressiveness_bps",)),
                 _order_outcome,
@@ -654,7 +631,6 @@ CONCEPTS: tuple[Concept, ...] = (
         "queue_position",
         {
             L3: Face(
-                "queue_position_per_order",
                 _MPL_PLOTLY,
                 Needs(("events",), classified=True),
                 _queue_position,
@@ -669,13 +645,11 @@ CONCEPTS: tuple[Concept, ...] = (
         "liquidity_at_touch",
         {
             L2: Face(
-                "liquidity_at_touch_aggregate",
                 _MPL_PLOTLY,
                 Needs(("depth_summary",), uses=("events",)),
                 _liquidity_at_touch_l2,
             ),
             L3: Face(
-                "liquidity_at_touch_per_order",
                 _MPL_PLOTLY,
                 Needs(("events",), classified=True),
                 _liquidity_at_touch_l3,
@@ -693,7 +667,6 @@ CONCEPTS: tuple[Concept, ...] = (
         "volume_percentiles",
         {
             L2: Face(
-                "volume_percentiles",
                 _MPL_PLOTLY,
                 Needs(("depth_summary",)),
                 _volume_percentiles,
@@ -708,7 +681,6 @@ CONCEPTS: tuple[Concept, ...] = (
         "price_view",
         {
             L2: Face(
-                "price_view",
                 _MPL_PLOTLY,
                 Needs(("depth_summary",), uses=("trades",)),
                 _price_view,
@@ -722,18 +694,14 @@ CONCEPTS: tuple[Concept, ...] = (
     ),
     Concept(
         "events_histogram",
-        {
-            L2: Face(
-                "events_histogram", _MPL_PLOTLY, Needs(("depth",)), _events_histogram
-            )
-        },
+        {L2: Face(_MPL_PLOTLY, Needs(("depth",)), _events_histogram)},
         "Events Histogram (price)",
         "Where the book changed: the number of price-level changes in the "
         "depth table, binned by price within the focus window, split by side.",
     ),
     Concept(
         "trade_size",
-        {L2: Face("trade_size", _MPL_PLOTLY, Needs(("trades",)), _trade_size)},
+        {L2: Face(_MPL_PLOTLY, Needs(("trades",)), _trade_size)},
         "Trade Size",
         "How big trades are: each execution a jittered dot on a log size "
         "axis, buys and sells in separate bands. Trade size is heavy-tailed, "
@@ -744,7 +712,6 @@ CONCEPTS: tuple[Concept, ...] = (
         "hidden_executions",
         {
             L3: Face(
-                "hidden_executions",
                 _MPL_PLOTLY,
                 Needs(("events",), uses=("trades",), columns=("raw_event_type",)),
                 _hidden_executions,
@@ -759,7 +726,7 @@ CONCEPTS: tuple[Concept, ...] = (
     # gallery draws a metric from its own card and the others from the
     # *_card helpers, so none binds from a scene.
     *(
-        Concept(key, {None: Face(key, _MPL_PLOTLY)})
+        Concept(key, {None: Face(_MPL_PLOTLY)})
         for key in (
             "time_series",
             "l1_ticker",
@@ -771,12 +738,9 @@ CONCEPTS: tuple[Concept, ...] = (
             "ofi_by_window",
             "kyle_lambda",
             "trading_halts",
+            "amihud",
+            "roll_spread",
         )
-    ),
-    # One value per window, drawn by the shared window-measure renderer.
-    *(
-        Concept(key, {None: Face("window_measure", _MPL_PLOTLY)})
-        for key in ("amihud", "roll_spread")
     ),
 )
 
@@ -852,20 +816,3 @@ def require(key: str, level: Level | None, backend: str) -> None:
     """
     if backend not in backends(key, level):
         raise _missing(key, level, backend, any_level=False)
-
-
-def register_backend(backend: str, namespace: Mapping[str, Any]) -> None:
-    """Register *backend*'s renderer for every coordinate the table gives it.
-
-    A built-in backend module calls this once, with its own ``globals()``,
-    after it defines its renderers.
-
-    Raises
-    ------
-    KeyError
-        If *namespace* lacks a renderer the table names for *backend*.
-    """
-    prefix = BACKEND_PREFIXES[backend]
-    for (key, level, b), face in PLOTS.items():
-        if b == backend:
-            RENDERERS.register((key, level, b), namespace[f"{prefix}_{face.renderer}"])

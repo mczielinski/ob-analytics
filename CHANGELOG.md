@@ -1331,6 +1331,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   - A metric named like a built-in plot drawn at a level, such as
     `trade_size`, cannot register its level-less renderer; give it another
     name.
+- **A built-in renderer is registered by its coordinate, not its name**
+  (#510). Each renderer in the matplotlib, Plotly and Bokeh modules now
+  carries a decorator that names its `(concept, level)`. The concept table no
+  longer stores a renderer name, and no code builds a function name from a
+  concept or a level. A renderer the table names and no backend registers
+  now fails a test instead of failing when its backend is imported. Plug-in
+  plots and backends still register with `RENDERERS.register`; nothing
+  changes for them.
 - **The capture directory layout** (#150). A capture's files are now in
   `seg-0001/`, `seg-0002/`, ... under `--out`, next to `manifest.json`. Read
   one segment as before, from its `orders.csv` or `depth.csv`; give `process`

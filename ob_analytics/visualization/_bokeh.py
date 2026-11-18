@@ -17,13 +17,14 @@ Install via ``pip install ob-analytics[bokeh]``.
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Any
 
 import numpy as np
 
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.visualization._concepts import register_backend
+from ob_analytics.protocols import Level
+from ob_analytics.visualization import _renderers
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     biased_color_norm,
@@ -33,6 +34,12 @@ from ob_analytics.visualization._data import (
 )
 from ob_analytics.visualization._palette import Palette, iceberg_opacity
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
+
+L2, L3 = Level.L2, Level.L3
+
+#: Registers the decorated function as this backend's renderer of a
+#: ``(concept, level)``.
+renders = partial(_renderers.renders, backend="bokeh")
 
 
 @lru_cache(maxsize=1)
@@ -200,6 +207,7 @@ def _bokeh_lollipops(fig: Any, side: Any, color: str, label: str) -> None:
     )
 
 
+@renders("trade_tape", L2)
 def bokeh_trade_tape_aggregate(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the L2 signed-lollipop trade tape.
 
@@ -228,6 +236,7 @@ def bokeh_trade_tape_aggregate(data: dict, *, theme: PlotTheme = DEFAULT_THEME) 
     return fig
 
 
+@renders("trade_tape", L3)
 def bokeh_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L3 (MBO) signed-lollipop trade tape with maker resting spans.
 
@@ -287,6 +296,7 @@ def bokeh_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) 
 _bokeh_color_field = biased_color_norm
 
 
+@renders("depth_heatmap", L2)
 def bokeh_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render the price-level depth heatmap."""
     pal = theme.palette
@@ -580,6 +590,7 @@ def _bokeh_book_bars(
     return fig
 
 
+@renders("book_snapshot", L2)
 def bokeh_book_snapshot_aggregate(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -587,6 +598,7 @@ def bokeh_book_snapshot_aggregate(
     return _bokeh_book_bars(data, per_order=False, theme=theme)
 
 
+@renders("book_snapshot", L3)
 def bokeh_book_snapshot_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
@@ -656,15 +668,13 @@ def _bokeh_depth_curve(
     return fig
 
 
+@renders("depth_chart", L2)
 def bokeh_depth_chart_aggregate(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L2 (MBP) depth chart: cumulative liquidity stepped per price level."""
     return _bokeh_depth_curve(data, per_order=False, theme=theme)
 
 
+@renders("depth_chart", L3)
 def bokeh_depth_chart_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """L3 (MBO) depth chart: cumulative liquidity stepped per individual order."""
     return _bokeh_depth_curve(data, per_order=True, theme=theme)
-
-
-# The concept table names the plots this backend draws; register them.
-register_backend("bokeh", globals())

@@ -31,7 +31,8 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import FancyBboxPatch, Patch
 
-from ob_analytics.visualization._concepts import register_backend
+from ob_analytics.protocols import Level
+from ob_analytics.visualization import _renderers
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     book_bar_thickness,
@@ -40,6 +41,12 @@ from ob_analytics.visualization._data import (
 )
 from ob_analytics.visualization._palette import Palette, iceberg_opacity
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
+
+L2, L3 = Level.L2, Level.L3
+
+#: Registers the decorated function as this backend's renderer of a
+#: ``(concept, level)``.
+renders = functools.partial(_renderers.renders, backend="matplotlib")
 
 # ---------------------------------------------------------------------------
 # Theme system
@@ -152,6 +159,7 @@ def save_figure(
 # ---------------------------------------------------------------------------
 
 
+@renders("time_series", None)
 @_themed
 def mpl_time_series(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -206,6 +214,7 @@ def _draw_lollipops(
     )
 
 
+@renders("trade_tape", L2)
 @_themed
 def mpl_trade_tape_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -487,6 +496,7 @@ def _draw_depth_lines(ax: Axes, depth: pd.DataFrame, col_bias: float) -> None:
     cbar.set_label("Volume")
 
 
+@renders("depth_heatmap", L2)
 @_themed
 def mpl_depth_heatmap(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -620,6 +630,7 @@ def mpl_depth_heatmap(
     return fig
 
 
+@renders("order_activity", L2)
 @_themed
 def mpl_order_activity_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -814,6 +825,7 @@ def _mpl_book_bars(
     return fig
 
 
+@renders("book_snapshot", L2)
 @_themed
 def mpl_book_snapshot_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -822,6 +834,7 @@ def mpl_book_snapshot_aggregate(
     return _mpl_book_bars(data, ax, theme, per_order=False)
 
 
+@renders("book_snapshot", L3)
 @_themed
 def mpl_book_snapshot_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -870,6 +883,7 @@ def _mpl_depth_curve(
     return fig
 
 
+@renders("depth_chart", L2)
 @_themed
 def mpl_depth_chart_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -878,6 +892,7 @@ def mpl_depth_chart_aggregate(
     return _mpl_depth_curve(data, ax, theme, per_order=False)
 
 
+@renders("depth_chart", L3)
 @_themed
 def mpl_depth_chart_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -906,6 +921,7 @@ def _annotate_cancel_populations(ax: Axes, pal: Palette) -> None:
     label(0.62, 0.88, "deep resting\n(pulled later)")
 
 
+@renders("cancellations", L3)
 @_themed
 def mpl_cancellations_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -977,6 +993,7 @@ def mpl_cancellations_per_order(
     return fig
 
 
+@renders("order_activity", L3)
 @_themed
 def mpl_order_activity_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1094,6 +1111,7 @@ def _step_paths(x: np.ndarray, y: np.ndarray, groups: np.ndarray) -> list[np.nda
     return np.split(vertices[keep], (2 * starts - np.arange(len(starts)))[1:])
 
 
+@renders("queue_position", L3)
 @_themed
 def mpl_queue_position_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1173,6 +1191,7 @@ def mpl_queue_position_per_order(
     return fig
 
 
+@renders("liquidity_at_touch", L2)
 @_themed
 def mpl_liquidity_at_touch_aggregate(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1236,6 +1255,7 @@ def mpl_liquidity_at_touch_aggregate(
     return fig
 
 
+@renders("liquidity_at_touch", L3)
 @_themed
 def mpl_liquidity_at_touch_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1277,6 +1297,7 @@ def mpl_liquidity_at_touch_per_order(
     return fig
 
 
+@renders("price_view", L2)
 @_themed
 def mpl_price_view(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1348,6 +1369,7 @@ def mpl_price_view(
     return fig
 
 
+@renders("l1_ticker", None)
 @_themed
 def mpl_l1_ticker(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1457,6 +1479,7 @@ def _step_envelope(
     return edges, np.append(top, top[-1]), np.append(bottom, bottom[-1])
 
 
+@renders("book_signals", None)
 @_themed
 def mpl_book_signals(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1540,6 +1563,7 @@ def mpl_book_signals(
     return fig
 
 
+@renders("trade_size", L2)
 @_themed
 def mpl_trade_size(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1580,6 +1604,7 @@ def mpl_trade_size(
     return fig
 
 
+@renders("order_outcome", L3)
 @_themed
 def mpl_order_outcome_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1624,6 +1649,7 @@ def mpl_order_outcome_per_order(
     return fig
 
 
+@renders("trade_tape", L3)
 @_themed
 def mpl_trade_tape_per_order(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1697,6 +1723,7 @@ def mpl_trade_tape_per_order(
     return fig
 
 
+@renders("volume_percentiles", L2)
 @_themed
 def mpl_volume_percentiles(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1784,6 +1811,7 @@ def mpl_volume_percentiles(
     return fig
 
 
+@renders("events_histogram", L2)
 @_themed
 def mpl_events_histogram(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1823,6 +1851,7 @@ def mpl_events_histogram(
     return fig
 
 
+@renders("vpin", None)
 @_themed
 def mpl_vpin(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1901,6 +1930,8 @@ def mpl_vpin(
     return fig
 
 
+@renders("amihud", None)
+@renders("roll_spread", None)
 @_themed
 def mpl_window_measure(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -1954,6 +1985,7 @@ def mpl_window_measure(
     return fig
 
 
+@renders("transaction_costs", None)
 @_themed
 def mpl_transaction_costs(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2028,6 +2060,7 @@ def mpl_transaction_costs(
     return fig
 
 
+@renders("order_flow_imbalance", None)
 @_themed
 def mpl_order_flow_imbalance(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2098,6 +2131,7 @@ def mpl_order_flow_imbalance(
     return fig
 
 
+@renders("ofi_by_window", None)
 @_themed
 def mpl_ofi_by_window(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2164,6 +2198,7 @@ def mpl_ofi_by_window(
     return fig
 
 
+@renders("kyle_lambda", None)
 @_themed
 def mpl_kyle_lambda(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2228,6 +2263,7 @@ def mpl_kyle_lambda(
 # ---------------------------------------------------------------------------
 
 
+@renders("hidden_executions", L3)
 @_themed
 def mpl_hidden_executions(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2316,6 +2352,7 @@ def mpl_hidden_executions(
     return fig
 
 
+@renders("trading_halts", None)
 @_themed
 def mpl_trading_halts(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2367,6 +2404,7 @@ def mpl_trading_halts(
     return fig
 
 
+@renders("bars", None)
 @_themed
 def mpl_bars(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
@@ -2460,7 +2498,3 @@ def mpl_bars(
     if own_figure:
         fig.tight_layout()
     return fig
-
-
-# The concept table names the plots this backend draws; register them.
-register_backend("matplotlib", globals())
