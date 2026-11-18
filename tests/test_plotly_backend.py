@@ -19,7 +19,6 @@ from ob_analytics.visualization._plotly import (
     _biased_color_norm,
     plotly_book_snapshot_aggregate,
     plotly_book_snapshot_per_order,
-    plotly_cancellations_aggregate,
     plotly_cancellations_per_order,
     plotly_depth_chart_aggregate,
     plotly_depth_chart_per_order,
@@ -204,27 +203,20 @@ class TestPlotlyPriceLevels:
 
 
 class TestPlotlyEventMap:
-    def test_returns_plotly_figure(self, plot_events: pd.DataFrame) -> None:
-        data = prepare.order_activity(plot_events, level="L2")
+    def test_returns_plotly_figure(self, plot_churn_depth: pd.DataFrame) -> None:
+        data = prepare.order_activity(plot_churn_depth, level="L2")
         fig = plotly_order_activity_aggregate(data)
         assert drawn(fig)["scattergl markers"] > 0
 
-    def test_empty_window_draws_no_data(self, plot_events: pd.DataFrame) -> None:
+    def test_empty_window_draws_no_data(self, plot_churn_depth: pd.DataFrame) -> None:
         data = prepare.order_activity(
-            plot_events,
+            plot_churn_depth,
             start_time=pd.Timestamp("2015-05-01 00:00:00"),
             end_time=pd.Timestamp("2015-05-01 00:30:00"),
             level="L2",
         )
         fig = plotly_order_activity_aggregate(data)
         assert "no data" in fig.layout.title.text
-
-
-class TestPlotlyVolumeMap:
-    def test_returns_plotly_figure(self, plot_events: pd.DataFrame) -> None:
-        data = prepare.cancellations(plot_events, level="L2")
-        fig = plotly_cancellations_aggregate(data)
-        assert drawn(fig)["scattergl markers"] > 0
 
 
 class TestPlotlyCancellationsL3:

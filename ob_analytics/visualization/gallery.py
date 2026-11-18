@@ -113,12 +113,16 @@ class PlotConcept:
 
     The ``key`` never carries a level; the level lives in the registry
     coordinate ``(concept, level, backend)`` and in the keys of ``variants``.
+    ``unavailable`` holds each face the run cannot draw, keyed by its level,
+    with the sentence that says what the face needs; the gallery shows it on
+    the card in place of the plot.
     """
 
     key: str
     title: str
     variants: dict[Level, PlotSpec]
     note: str = ""
+    unavailable: dict[Level, str] = field(default_factory=dict)
 
     def at(self, level: Level) -> PlotSpec | None:
         """Return the variant registered at *level*, or ``None``."""
@@ -182,25 +186,34 @@ def _window_over(
 
 
 def _concept_cards(scene: _concepts.Scene) -> list[PlotConcept]:
-    """One :class:`PlotConcept` per table concept the run has a face for.
+    """One :class:`PlotConcept` per table concept with a gallery face.
 
-    Every face comes from the concept table, bound to *scene*; a face whose
-    data the run lacks binds to nothing and is left out.
+    Every face comes from the concept table.  A face whose needs *scene*
+    meets is bound to it; one whose needs it does not meet goes in
+    :attr:`PlotConcept.unavailable` with what it needs.
     """
     cards: list[PlotConcept] = []
     for entry in _concepts.CONCEPTS:
         variants: dict[Level, PlotSpec] = {}
+        unavailable: dict[Level, str] = {}
         title = entry.title.format(snapshot=scene.snapshot_label)
         for level, face in entry.faces.items():
-            if level is None or face.bind is None:
+            if level is None or face.needs is None or face.bind is None:
+                continue
+            reason = face.needs.unmet(scene)
+            if reason is not None:
+                unavailable[level] = reason
                 continue
             binding = face.bind(scene)
-            if binding is not None:
-                variants[level] = PlotSpec(
-                    entry.key, title, entry.key, binding.prepare, binding.kwargs
+            variants[level] = PlotSpec(
+                entry.key, title, entry.key, binding.prepare, binding.kwargs
+            )
+        if variants or unavailable:
+            cards.append(
+                PlotConcept(
+                    entry.key, title, variants, entry.note, unavailable=unavailable
                 )
-        if variants:
-            cards.append(PlotConcept(entry.key, title, variants, note=entry.note))
+            )
     return cards
 
 
@@ -455,8 +468,10 @@ def build_gallery_model(result: PipelineResult) -> GalleryModel:
     Each order-book concept comes from the concept table
     (:mod:`ob_analytics.visualization._concepts`), with a variant at each
     level whose data the run has: a price-level (L2) run has no per-order
-    events, so it gets the L2 faces only.  A concept with both an L2 and an
-    L3 variant is :attr:`~PlotConcept.comparable`.  The analytics are one
+    events, so it gets the L2 faces only.  Each face the run cannot draw is
+    kept in :attr:`~PlotConcept.unavailable`, with what the face needs.  A
+    concept with both an L2 and an L3 variant is
+    :attr:`~PlotConcept.comparable`.  The analytics are one
     card per registered metric that applies to the run; callers may append
     more (built with the ``*_card`` helpers) to :attr:`GalleryModel.analytics`.
 
@@ -491,6 +506,11 @@ def build_gallery_model(result: PipelineResult) -> GalleryModel:
 
     offset = clock["timestamp"].min() + pd.Timedelta(minutes=1)
     summary = depth_summary[depth_summary["timestamp"] >= offset]
+    if summary.empty:
+        # A run shorter than a minute keeps its whole summary, so the
+        # summary faces draw whenever the run has a summary, as
+        # available_concepts says.
+        summary = depth_summary
     summary_start, summary_end = _window_over(summary, zoom_start, zoom_end)
 
     scene = _concepts.Scene(
@@ -594,7 +614,8 @@ def plot_result(
         return plot(concept, resolved, backend=backend, ax=ax, **data)
 
     model = build_gallery_model(result)
-    concept_map = {c.key: c for c in model.concepts}
+    concept_map = {c.key: c for c in model.concepts if c.variants}
+    unavailable = next((c.unavailable for c in model.concepts if c.key == concept), {})
     pc = concept_map.get(concept)
     if pc is None:
         metric_names = sorted(spec.name for spec in model.analytics)
@@ -602,6 +623,8 @@ def plot_result(
         reason = None if metric is None else skip_reason(metric, result)
         if reason is not None:
             hint = f"It is not built for this result: {reason}."
+        elif unavailable:
+            hint = f"It is not built for this result. {_needs_text(unavailable)}"
         elif built_elsewhere:
             hint = "It is not built for this result."
         else:
@@ -614,11 +637,14 @@ def plot_result(
     spec = None if resolved is None else pc.at(resolved)
     if spec is None:
         have = ", ".join(sorted(lvl.value for lvl in pc.variants))
+        hint = f"It is drawn at {have}."
+        if resolved is not None and resolved in unavailable:
+            hint = f"{hint} {_needs_text({resolved: unavailable[resolved]})}"
         raise UnknownNameError(
             f"{_kind_text([resolved]).removeprefix('at ')} concept",
             concept,
             (),
-            hint=f"It is drawn at {have}.",
+            hint=hint,
         )
     _concepts.require(concept, resolved, backend)
 
@@ -628,19 +654,41 @@ def plot_result(
     return plot(concept, resolved, backend=backend, ax=ax, **data)
 
 
+def _needs_text(unavailable: dict[Level, str]) -> str:
+    """Say what each face in *unavailable* needs, one sentence per level."""
+    return " ".join(
+        f"At {level}, {reason}."
+        for level, reason in sorted(unavailable.items(), key=lambda kv: kv[0].value)
+    )
+
+
 def available_concepts(result: PipelineResult) -> dict[str, list[str]]:
     """Concept keys built for *result*, mapped to their available level names.
 
     A discoverability companion to :func:`plot_result`: shows what
     ``plot_result(result, concept, level=...)`` can render for this dataset
     (which varies by format -- e.g. ``hidden_executions`` is LOBSTER-only).
+    It reads what each face needs from the concept table and checks *result*
+    for it, so it draws nothing and builds no gallery model.
 
     A registered metric is listed too, with an empty level list: a metric is
     level-less, so ``plot_result(result, "amihud")`` takes no ``level=``.
     """
-    model = build_gallery_model(result)
-    concepts = {c.key: sorted(lvl.value for lvl in c.variants) for c in model.concepts}
-    return {**concepts, **{spec.name: [] for spec in model.analytics}}
+    from ob_analytics.metrics import applicable_metrics
+
+    concepts: dict[str, list[str]] = {}
+    for entry in _concepts.CONCEPTS:
+        drawn = sorted(
+            level.value
+            for level, face in entry.faces.items()
+            if level is not None
+            and face.needs is not None
+            and face.needs.unmet(result) is None
+        )
+        if drawn:
+            concepts[entry.key] = drawn
+    metrics = {m.name: [] for m in applicable_metrics(result) if m.name not in concepts}
+    return {**concepts, **metrics}
 
 
 def bars_card(bars: pd.DataFrame, *, label: str = "") -> PlotSpec:
@@ -729,11 +777,13 @@ class _Panel:
     :func:`ob_analytics.visualization.plot`; the display fields
     (``backend``/``stem``/``label``/...) drive the HTML.  ``rendered`` and
     ``reason`` are set by the render loop and consumed by :func:`_render_panel`.
+    A panel with no ``prepare`` is a face the run cannot draw: ``reason``
+    says what it needs, and the render loop skips it.
     """
 
     concept: str
     level: Level | None
-    prepare: Callable[..., dict]
+    prepare: Callable[..., dict] | None
     prep_kwargs: dict[str, Any]
     backend: str
     stem: str
@@ -790,6 +840,22 @@ def _backend_panels(
     return panels
 
 
+def _needs_panel(concept: str, level: Level, reason: str, backend: str) -> _Panel:
+    """The one panel of a face the run cannot draw: it says what the face needs."""
+    return _Panel(
+        concept=concept,
+        level=level,
+        prepare=None,
+        prep_kwargs={},
+        backend=backend,
+        stem=f"{concept}.{level}",
+        label=_LEVEL_LABEL[level],
+        panel_cls=_panel_cls(backend),
+        role="equal",
+        reason=f"This run cannot draw this face: {reason}.",
+    )
+
+
 def _comparison_backend(backends: list[str]) -> str:
     """The single backend used for the side-by-side L2|L3 comparison view."""
     return "plotly" if "plotly" in backends else backends[0]
@@ -814,15 +880,24 @@ def _project(
         backend = _comparison_backend(backends)
         cards = []
         for concept in model.concepts:
-            # Comparable concepts get an L2|L3 column pair; single-variant
+            # Comparable concepts get an L2|L3 column pair; single-face
             # concepts get a one-column card labeled "L2-only" / "L3-only"
-            # rather than being dropped from the view silently.
+            # rather than being dropped from the view silently.  A face the
+            # run cannot draw keeps its column, which says what it needs.
             panels = []
-            for level, spec in sorted(
-                concept.variants.items(), key=lambda kv: kv[0].value
-            ):
+            faces = {**concept.variants, **concept.unavailable}
+            for level in sorted(faces, key=lambda lvl: lvl.value):
+                if level in concept.unavailable:
+                    panel = _needs_panel(
+                        concept.key, level, concept.unavailable[level], backend
+                    )
+                    if len(faces) == 1:
+                        panel.label = f"{panel.label}  ·  {level.value}-only"
+                    panels.append(panel)
+                    continue
+                spec = concept.variants[level]
                 label = _LEVEL_LABEL[level]
-                if not concept.comparable:
+                if len(faces) == 1:
                     label = f"{label}  ·  {level.value}-only"
                 panels.append(
                     _Panel(
@@ -850,10 +925,15 @@ def _project(
     for concept in model.concepts:
         for level in levels_for_view:
             spec = concept.at(level)
+            title = f"{concept.title} -- {level}"
             if spec is None:
+                if level in concept.unavailable:
+                    panel = _needs_panel(
+                        concept.key, level, concept.unavailable[level], backends[0]
+                    )
+                    cards.append(_Card(title, [panel], note=concept.note))
                 continue
             stem = f"{concept.key}.{level}"
-            title = f"{concept.title} -- {level}"
             cards.append(
                 _Card(
                     title,
@@ -962,6 +1042,8 @@ def generate_gallery(
         # prepare step runs (and logs) once per face, not once per backend.
         prepared: dict[tuple[int, int], dict | Exception] = {}
         for panel in card.panels:
+            if panel.prepare is None:  # a face the run cannot draw
+                continue
             panel.reason = unloaded.get(panel.backend) or _misplaced(panel, loaded)
             if panel.reason:
                 if panel.reason not in logged:
@@ -1087,6 +1169,7 @@ def _render_and_save(
     raises is cached as its error, so it is not run again for the next
     backend.
     """
+    assert panel.prepare is not None  # the render loop skips the needs panels
     key = (id(panel.prepare), id(panel.prep_kwargs))
     if key not in prepared:
         try:

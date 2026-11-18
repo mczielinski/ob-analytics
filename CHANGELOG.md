@@ -245,6 +245,23 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   - `ofi_horizon_panel` -> `ofi_by_window_card`.
   - `kyle_panel` -> `kyle_lambda_card`.
   - `trading_halts_panel` -> `trading_halts_card`.
+- **An L2 face needs only aggregated data** (#492). Five faces at L2 read
+  per-order events, so an L2 run could not draw them.
+  - `hidden_executions` -> moved to L3. It needs LOBSTER's `raw_event_type`.
+    A LOBSTER run with no hidden executions now gets the card too, and the
+    card draws the trade price only.
+  - The L2 `cancellations` face -> removed. A price level cannot tell a
+    cancel from a fill, so `cancellations` is an L3 plot only, and
+    `prepare.cancellations` takes no `level`.
+  - `prepare.order_activity(..., level="L2")` takes `depth`, not `events`.
+    It draws the size added to and removed from each price level.
+  - The L2 `events_histogram` card counts the price-level changes in the
+    depth table. `prepare.events_histogram` is unchanged.
+  - The L2 `liquidity_at_touch` face draws without events. It adds the
+    event strip on a per-order run only.
+  - `time_series` is level-less, as the metrics are. `plot("time_series", ...)`
+    is unchanged. A call that passes `level="L2"` to `plot` or
+    `prepare.time_series` -> leave `level` out.
 - **One name per quantity, per input and per measure** (#414). The package
   keeps no aliases for the old names.
   - The measures lose `compute_`, as the other six never had it:
@@ -1547,6 +1564,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     `prepare.vpin` and `prepare.order_flow_imbalance` take `min_trades`
     (default 10), and so do `result.plot("vpin")` and
     `result.plot("order_flow_imbalance")`.
+- **Every L2 face draws on an L2 run** (#492). Each face declares the data it
+  needs in a new `Needs`: the tables that must have rows, the tables it reads
+  when they have rows, and whether the events must be classified or carry a
+  given column. `available_concepts` checks a result against these needs, so
+  it no longer builds the gallery model. A gallery card for a face the run
+  cannot draw now says what the face needs, where before the card was left
+  out with no reason. A run shorter than a minute keeps its whole depth
+  summary, so the depth-summary faces draw on it.
 - **The Plotly gallery of the bundled sample is 28 MiB, not 231 MiB** (#491).
   Each line carried every row of `depth_summary`, so `book_signals.html`
   alone was 82 MiB. The data functions now thin a long series to 1,000 time

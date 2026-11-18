@@ -47,15 +47,24 @@ a single level resolves it automatically, so you pass only the concept name;
 needs `level="L2"` or `level="L3"`, with the arguments of that face.
 
 Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
-`cancellations`, `book_snapshot`, `depth_chart`, `book_replay`,
-`liquidity_at_touch`. L2-only:
-`time_series`, `depth_heatmap`, `volume_percentiles`, `events_histogram`,
-`hidden_executions`, `price_view`, `trade_size`. L3-only: `order_outcome`,
-`queue_position`. Level-less analytics: `vpin`, `order_flow_imbalance`,
+`book_snapshot`, `depth_chart`, `book_replay`, `liquidity_at_touch`. L2-only:
+`depth_heatmap`, `volume_percentiles`, `events_histogram`, `price_view`,
+`trade_size`. L3-only: `cancellations`, `order_outcome`, `queue_position`,
+`hidden_executions`. Level-less: `time_series`, which only `plot` draws, and
+the analytics `vpin`, `order_flow_imbalance`,
 `kyle_lambda`, `ofi_by_window`, `l1_ticker`, `book_signals`,
 `transaction_costs`, `amihud`, `roll_spread`, `bars`, `trading_halts`. All
 but the last two are also registered [metrics](metrics.md), so
 `result.plot("vpin")` computes and draws them.
+
+The level says what data a face needs. An L2 face needs only aggregated data:
+the depth table, the depth summary and the trades. So every L2 face draws on
+an L2 run, and on an L3 run it shows the aggregated view of the same book. An
+L3 face needs per-order events, and some L3 faces also need the order types or
+a column that only one source fills. For example, `hidden_executions` needs
+LOBSTER's `raw_event_type`. `available_concepts(result)` checks these needs
+against the result. In the gallery, the card of a face that the run cannot
+draw says what the face needs.
 
 ## Book replay
 

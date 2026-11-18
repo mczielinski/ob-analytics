@@ -31,7 +31,11 @@ def drawn(fig: Any) -> Counter[str]:
 
     if isinstance(fig, MplFigure):
         return _matplotlib(fig)
-    module = type(fig).__module__
+    # The MRO, not the class: the book replay's figure subclasses plotly's.
+    module = next(
+        (c.__module__ for c in type(fig).__mro__ if c.__module__.startswith("plotly")),
+        type(fig).__module__,
+    )
     if module.startswith("plotly"):
         return _plotly(fig)
     if module.startswith("bokeh"):

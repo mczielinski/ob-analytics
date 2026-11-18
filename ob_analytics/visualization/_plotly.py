@@ -396,15 +396,15 @@ def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
 def plotly_order_activity_aggregate(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
-    """Render a limit-order event map."""
+    """Render the size added to and removed from each price level."""
     pal = theme.palette
     go = _import_plotly()
     created = data["created"]
     deleted = data["deleted"]
 
     if data["events"].empty:
-        return _base_figure(go, theme, title="Limit Order Event Map (no data)")
-    fig = _base_figure(go, theme, title="Limit Order Event Map")
+        return _base_figure(go, theme, title="Price Level Changes (no data)")
+    fig = _base_figure(go, theme, title="Price Level Changes")
 
     col_map = {"bid": pal.bid, "ask": pal.ask}
 
@@ -423,7 +423,7 @@ def plotly_order_activity_aggregate(
                         "color": col_map[direction],
                         "opacity": 0.6,
                     },
-                    name=f"Created ({direction})",
+                    name=f"Added ({direction})",
                     hovertemplate=(
                         "Time: %{x}<br>Price: %{y:.2f}<br>"
                         "Vol: %{customdata:.4f}<extra></extra>"
@@ -448,7 +448,7 @@ def plotly_order_activity_aggregate(
                         "opacity": 0.3,
                         "symbol": "x",
                     },
-                    name=f"Deleted ({direction})",
+                    name=f"Removed ({direction})",
                     hovertemplate=(
                         "Time: %{x}<br>Price: %{y:.2f}<br>"
                         "Vol: %{customdata:.4f}<extra></extra>"
@@ -458,39 +458,7 @@ def plotly_order_activity_aggregate(
             )
 
     fig.update_xaxes(title_text="Time")
-    fig.update_yaxes(title_text="Limit Price")
-    return fig
-
-
-def plotly_cancellations_aggregate(
-    data: dict, *, theme: PlotTheme = DEFAULT_THEME
-) -> Any:
-    """Render a volume map of flashed limit orders."""
-    pal = theme.palette
-    go = _import_plotly()
-    events = data["events"]
-    log_scale = data["log_scale"]
-    col_map = {"bid": pal.bid, "ask": pal.ask}
-
-    fig = _base_figure(go, theme, title="Volume Map of Flashed Limit Orders")
-
-    for direction in ["bid", "ask"]:
-        subset = events[events["direction"] == direction]
-        if subset.empty:
-            continue
-        fig.add_trace(
-            go.Scattergl(
-                x=subset["timestamp"],
-                y=subset["volume"],
-                mode="markers",
-                marker={"size": 4, "color": col_map[direction], "opacity": 0.6},
-                name=direction.capitalize(),
-                hovertemplate="Time: %{x}<br>Volume: %{y:.4f}<extra></extra>",
-            )
-        )
-
-    fig.update_xaxes(title_text="Time")
-    fig.update_yaxes(title_text="Volume", type="log" if log_scale else "linear")
+    fig.update_yaxes(title_text="Price")
     return fig
 
 

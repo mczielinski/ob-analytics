@@ -42,6 +42,7 @@ from ob_analytics.schemas import (
     validate_events_df,
     validate_trades_df,
 )
+from ob_analytics.visualization import _concepts
 from tests._drawn import drawn
 
 _BASE_MS = 1_700_000_000_000  # arbitrary epoch-ms anchor
@@ -618,22 +619,80 @@ class TestL2Gallery:
         from ob_analytics.visualization import available_concepts
 
         concepts = available_concepts(toy_l2_result)
-        # depth/trades faces are present …
-        assert "depth_heatmap" in concepts
-        # … and every per-order (L3) face is skipped, not errored.  The book
-        # snapshot and depth chart used to be skipped too, when both their
-        # faces read the per-order book; their L2 faces now read the depth
-        # table, so an L2 run has them (and only them).
+        # Every L2 face reads only the depth table, the depth summary and the
+        # trades, so an L2 run lists every concept with an L2 face, at L2 …
+        l2_concepts = {c.key for c in _concepts.CONCEPTS if Level.L2 in c.faces}
+        assert {k: v for k, v in concepts.items() if k in l2_concepts} == {
+            k: ["L2"] for k in l2_concepts
+        }
+        # … and every L3-only concept is skipped, not errored.
         for l3_only in (
             "queue_position",
             "order_outcome",
-            "order_activity",
             "cancellations",
-            "events_histogram",
+            "hidden_executions",
         ):
             assert l3_only not in concepts
-        assert concepts["book_snapshot"] == ["L2"]
-        assert concepts["depth_chart"] == ["L2"]
+
+    @pytest.mark.parametrize(
+        ("key", "backend"),
+        [
+            (c.key, backend)
+            for c in _concepts.CONCEPTS
+            if Level.L2 in c.faces
+            for backend in c.faces[Level.L2].backends
+        ],
+    )
+    def test_every_l2_face_draws(self, toy_l2_result, key, backend):
+        """#492: an L2 face needs only aggregated data, so an L2 run draws it."""
+        from ob_analytics.visualization import plot_result
+
+        pytest.importorskip(backend)
+        fig = plot_result(toy_l2_result, key, "L2", backend=backend)
+        assert drawn(fig)
+
+    def test_a_card_says_what_an_l3_face_needs(self, toy_l2_result):
+        from ob_analytics.visualization.gallery import build_gallery_model
+
+        model = build_gallery_model(toy_l2_result)
+        queue = next(c for c in model.concepts if c.key == "queue_position")
+        assert not queue.variants
+        assert queue.unavailable == {
+            Level.L3: "it needs per-order events, and this run has none"
+        }
+
+    def test_the_comparison_view_keeps_the_column_of_a_face_it_cannot_draw(
+        self, toy_l2_result
+    ):
+        from ob_analytics.visualization.gallery import _project, build_gallery_model
+
+        cards = {
+            card.title: card
+            for card in _project(
+                build_gallery_model(toy_l2_result), "comparison", ["matplotlib"]
+            )
+        }
+        # A comparable concept: the L2 face draws, the L3 column says why not.
+        l2, l3 = cards["Trade Tape"].panels
+        assert l2.prepare is not None and "-only" not in l2.label
+        assert l3.prepare is None and "-only" not in l3.label
+        assert l3.reason.startswith("This run cannot draw this face: it needs")
+        # An L3-only concept keeps its one column, labelled as such.
+        (queue,) = cards["Queue Position"].panels
+        assert queue.prepare is None and queue.label.endswith("L3-only")
+
+    def test_the_gallery_card_shows_what_the_face_needs(self, toy_l2_result, tmp_path):
+        from ob_analytics.visualization.gallery import generate_gallery
+
+        out = generate_gallery(
+            toy_l2_result, tmp_path / "g", view="l3", backends=["matplotlib"]
+        )
+        page = out.read_text()
+        assert "Queue Position -- L3" in page
+        assert (
+            "This run cannot draw this face: it needs per-order events, and this "
+            "run has none."
+        ) in page
 
     @pytest.mark.parametrize("key", ["book_snapshot", "depth_chart"])
     def test_the_book_faces_draw_the_price_level_book(self, toy_l2_result, key):

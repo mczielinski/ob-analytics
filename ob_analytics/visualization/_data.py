@@ -1087,8 +1087,42 @@ def prepare_hidden_liquidity_overlay(
     }
 
 
+def price_level_changes(depth: pd.DataFrame) -> pd.DataFrame:
+    """The size added to and removed from each price level, one row per change.
+
+    *depth* holds one row per price-level update with the level's new
+    resting size.  Each row here is the change from the level's previous
+    size: ``action`` is ``"created"`` when size was added and ``"deleted"``
+    when it was removed, and ``volume`` is the size of the change.  The
+    opening book (the rows at the table's first timestamp) is the starting
+    point, not a change, and updates that do not change the size are left
+    out.
+
+    A price level has no order identity, so a removal can be a cancel or a
+    fill.
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``timestamp``, ``price``, ``volume``, ``direction`` and ``action``,
+        in time order.
+    """
+    columns = ["timestamp", "price", "volume", "direction", "action"]
+    if depth.empty:
+        return depth[columns[:4]].assign(action=pd.Series(dtype=object))
+    ordered = depth.sort_values("timestamp", kind="stable")
+    keys = [ordered["direction"].astype(str), ordered["price"]]
+    previous = ordered.groupby(keys, sort=False)["volume"].shift(fill_value=0)
+    change = ordered["volume"] - previous
+    keep = (ordered["timestamp"] > ordered["timestamp"].iloc[0]) & (change != 0)
+    changes = ordered.loc[keep, columns[:4]].copy()
+    changes["volume"] = change[keep].abs()
+    changes["action"] = np.where(change[keep] > 0, "created", "deleted")
+    return changes.reset_index(drop=True)
+
+
 def prepare_order_activity_l2_data(
-    events: pd.DataFrame,
+    depth: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     price_from: float | None = None,
@@ -1098,21 +1132,24 @@ def prepare_order_activity_l2_data(
     *,
     time_bins: int | None = SERIES_BINS,
 ) -> dict[str, Any]:
-    """Prepare data for a limit-order event map.
+    """Prepare data for a map of the size added to and removed from each price level.
 
-    Many events can fall on one spot of the screen.  With *time_bins*, the
+    The changes come from the depth table (:func:`price_level_changes`), so
+    the map needs no per-order events: ``created`` holds the size added to a
+    level and ``deleted`` the size removed from it.
+
+    Many changes can fall on one spot of the screen.  With *time_bins*, the
     time axis is split into that many columns and the price axis into rows,
-    and each spot keeps only its largest event of each side and action
-    (:func:`thin_points`); ``None`` keeps every event.  The payload's
-    ``thinned`` says how many events were kept.
+    and each spot keeps only its largest change of each side and action
+    (:func:`thin_points`); ``None`` keeps every change.  The payload's
+    ``thinned`` says how many changes were kept.
     """
+    events = price_level_changes(depth)
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
     events = events[
-        (events["timestamp"] >= start_time)
-        & (events["timestamp"] <= end_time)
-        & ((events["type"] == "flashed-limit") | (events["type"] == "resting-limit"))
-    ].copy()
+        (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
+    ]
 
     if volume_from is not None:
         events = events[events["volume"] >= volume_from]
@@ -1944,65 +1981,6 @@ def prepare_trade_tape_l3_data(
         "dense": dense,
         "y_range": y_range,
     }
-
-
-def prepare_cancellations_l2_data(
-    events: pd.DataFrame,
-    action: str = "deleted",
-    event_type: list[str] | None = None,
-    start_time: pd.Timestamp | None = None,
-    end_time: pd.Timestamp | None = None,
-    price_from: float | None = None,
-    price_to: float | None = None,
-    volume_from: float | None = None,
-    volume_to: float | None = None,
-    log_scale: bool = False,
-    *,
-    time_bins: int | None = SERIES_BINS,
-) -> dict[str, Any]:
-    """Prepare data for a volume map of flashed limit orders.
-
-    Many orders can fall on one spot of the screen.  With *time_bins*, the
-    time axis is split into that many columns and the volume axis into rows
-    (on the log of the volume when *log_scale* is true), and each spot keeps
-    only its largest order of each side (:func:`thin_points`); ``None`` keeps
-    every order.  The payload's ``thinned`` says how many orders were kept.
-    """
-    if event_type is None:
-        event_type = ["flashed-limit"]
-    if action not in ("deleted", "created"):
-        raise ConfigError(f"action must be 'deleted' or 'created', got {action!r}")
-
-    start_time, end_time = _default_start_end(events, start_time, end_time)
-
-    mask = (
-        (events["action"] == action)
-        & events["type"].isin(event_type)
-        & (events["timestamp"] >= start_time)
-        & (events["timestamp"] <= end_time)
-    )
-    events = events[mask]
-
-    if price_from:
-        events = events[events["price"] >= price_from]
-    if price_to:
-        events = events[events["price"] <= price_to]
-    if volume_from is None:
-        volume_from = float(events["volume"].quantile(0.0001))
-    events = events[events["volume"] >= volume_from]
-    if volume_to is None:
-        volume_to = float(events["volume"].quantile(0.9999))
-    events = events[events["volume"] <= volume_to]
-    events, thinned = thin_points(
-        events,
-        y="volume",
-        by=["direction"],
-        size="volume",
-        bins=time_bins,
-        log_y=log_scale,
-    )
-
-    return {"events": events, "log_scale": log_scale, "thinned": thinned}
 
 
 def prepare_cancellations_l3_data(
