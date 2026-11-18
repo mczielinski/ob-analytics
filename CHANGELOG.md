@@ -1496,6 +1496,15 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **No negative depth bins at low prices** (#488). With the default
+  `depth_bps=25` and `depth_bins=20`, a best price under about 100 ticks, as on
+  every cent-priced prediction market, could give a negative size in the last
+  depth bin. The bin boundaries went backwards when the window held fewer
+  ticks than bins. Now they never go backwards: a bin left with no tick stays
+  at zero, and a side's bins add up to its size in the window. The
+  columns and their names do not change, and neither do the values when the
+  window holds at least as many ticks as bins. A property test in
+  `tests/test_depth_engine.py` checks best prices from 1 tick up.
 - **A saved run keeps the loader's counts** (#503). The Databento loader
   counts the records the venue flagged after a gap (`F_MAYBE_BAD_BOOK`), and
   `audit` warns when there are any. A `run_windows` output lost the count, so
