@@ -52,11 +52,185 @@ class TestSaveLoadParquet:
         )
         assert not (tmp_path / "new.parquet").exists()
 
+    def test_failed_rollback_step_keeps_going_and_names_the_backup(
+        self, tmp_path: Path, monkeypatch
+    ):
+        # Issue #524: one step of the rollback fails; the others still run,
+        # the first error is the one raised, and its notes name what is left.
+        earlier = {name: pd.DataFrame({"x": [i]}) for i, name in enumerate("abc")}
+        for name, frame in earlier.items():
+            save_data({name: frame}, tmp_path)
+        replace = Path.replace
+
+        def fail_twice(self, target):
+            if Path(target).name == "c.parquet":
+                raise OSError("disk full")
+            if self.name == ".b.parquet.bak":
+                raise PermissionError("no access")
+            return replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", fail_twice)
+        changed = pd.DataFrame({"x": [9]})
+
+        with pytest.raises(OSError, match="disk full") as caught:
+            save_data({"a": changed, "b": changed, "c": changed}, tmp_path)
+
+        notes = "\n".join(caught.value.__notes__)
+        backup = tmp_path / ".b.parquet.bak"
+        assert str(tmp_path / "b.parquet") in notes
+        assert str(backup) in notes
+        assert "no access" in notes
+        # Put back despite the failure after it, and the failed file untouched.
+        pd.testing.assert_frame_equal(
+            pd.read_parquet(tmp_path / "a.parquet"), earlier["a"]
+        )
+        pd.testing.assert_frame_equal(
+            pd.read_parquet(tmp_path / "c.parquet"), earlier["c"]
+        )
+        # The backup named in the error survives, holding the earlier file.
+        pd.testing.assert_frame_equal(pd.read_parquet(backup), earlier["b"])
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            ".b.parquet.bak",
+            "a.parquet",
+            "b.parquet",
+            "c.parquet",
+        ]
+        # A later save takes another backup name and leaves this one alone.
+        monkeypatch.undo()
+        save_data({"b": changed}, tmp_path)
+        pd.testing.assert_frame_equal(pd.read_parquet(backup), earlier["b"])
+
     def test_load_from_empty_dir_raises(self, tmp_path: Path):
         empty = tmp_path / "empty"
         empty.mkdir()
         with pytest.raises(FileNotFoundError, match="No .parquet files"):
             load_data(empty)
+
+
+class TestInstallFiles:
+    """Moving a set of files into place, all or none (issue #524)."""
+
+    @staticmethod
+    def _staged(tmp_path: Path, names: str) -> list[tuple[Path, Path]]:
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        files = []
+        for name in names:
+            (staging / name).write_text(f"new {name}")
+            files.append((staging / name, tmp_path / name))
+        return files
+
+    def test_a_new_file_that_cannot_be_removed_is_named(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from ob_analytics.data import _install_files
+
+        (tmp_path / "a").write_text("old a")
+        files = self._staged(tmp_path, "abc")
+        replace, unlink = Path.replace, Path.unlink
+
+        def fail_on_c(self, target):
+            if Path(target).name == "c":
+                raise OSError("disk full")
+            return replace(self, target)
+
+        def refuse_b(self, missing_ok=False):
+            if self == tmp_path / "b":
+                raise PermissionError("no access")
+            return unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "replace", fail_on_c)
+        monkeypatch.setattr(Path, "unlink", refuse_b)
+
+        with pytest.raises(OSError, match="disk full") as caught:
+            _install_files(files)
+
+        assert caught.value.__notes__ == [
+            (
+                f"Could not remove {tmp_path / 'b'}, which did not exist "
+                "before (no access)."
+            )
+        ]
+        assert (tmp_path / "a").read_text() == "old a"
+        assert not (tmp_path / ".a.bak").exists()
+
+    def test_a_backup_of_the_failed_file_that_stays_is_named(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from ob_analytics.data import _install_files
+
+        for name in "ab":
+            (tmp_path / name).write_text(f"old {name}")
+        files = self._staged(tmp_path, "ab")
+        replace, unlink = Path.replace, Path.unlink
+
+        def fail_on_b(self, target):
+            if Path(target).name == "b":
+                raise OSError("disk full")
+            return replace(self, target)
+
+        def refuse_b_backup(self, missing_ok=False):
+            if self.name == ".b.bak":
+                raise PermissionError("no access")
+            return unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "replace", fail_on_b)
+        monkeypatch.setattr(Path, "unlink", refuse_b_backup)
+
+        with pytest.raises(OSError, match="disk full") as caught:
+            _install_files(files)
+
+        assert caught.value.__notes__ == [
+            (
+                f"Could not remove the backup {tmp_path / '.b.bak'}; "
+                f"{tmp_path / 'b'} is intact (no access)."
+            )
+        ]
+        assert (tmp_path / "a").read_text() == "old a"
+        assert (tmp_path / "b").read_text() == "old b"
+
+    def test_an_interrupt_is_rolled_back_too(self, tmp_path: Path, monkeypatch):
+        from ob_analytics.data import _install_files
+
+        (tmp_path / "a").write_text("old a")
+        files = self._staged(tmp_path, "ab")
+        replace = Path.replace
+
+        def interrupt_on_b(self, target):
+            if Path(target).name == "b":
+                raise KeyboardInterrupt
+            return replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", interrupt_on_b)
+
+        with pytest.raises(KeyboardInterrupt):
+            _install_files(files)
+
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a", "staging"]
+        assert (tmp_path / "a").read_text() == "old a"
+
+    def test_a_backup_left_after_success_warns(self, tmp_path: Path, monkeypatch):
+        from ob_analytics.data import _install_files
+
+        for name in "ab":
+            (tmp_path / name).write_text(f"old {name}")
+        files = self._staged(tmp_path, "ab")
+        unlink = Path.unlink
+
+        def refuse_a_backup(self, missing_ok=False):
+            if self.name == ".a.bak":
+                raise PermissionError("no access")
+            return unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", refuse_a_backup)
+
+        with pytest.warns(UserWarning, match=r"\.a\.bak"):
+            _install_files(files)
+
+        assert (tmp_path / "a").read_text() == "new a"
+        assert (tmp_path / "b").read_text() == "new b"
+        # The other backup is still removed.
+        assert not (tmp_path / ".b.bak").exists()
 
 
 class TestLoaderCounts:
