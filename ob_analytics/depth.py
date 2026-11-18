@@ -357,8 +357,28 @@ def book_levels(
     Raises
     ------
     ConfigError
-        If the depth table names an event that *events* does not have.
+        If a column is missing, if *num_levels* is below 1, if the depth
+        table is in display units (float prices, or sizes that are not whole
+        lots), or if it names an event that *events* does not have.
     """
+    validate_columns(events, {"event_id"}, "book_levels")
+    validate_columns(depth, {"event_id", "price", "volume", "direction"}, "book_levels")
+    if num_levels < 1:
+        raise ConfigError(
+            f"book_levels: num_levels must be 1 or more, not {num_levels}."
+        )
+    volume = depth["volume"].to_numpy()
+    # price_level_volume can return whole lots as floats, so a float size
+    # column of whole numbers is read as lots.
+    if not pd.api.types.is_integer_dtype(depth["price"]) or not (
+        pd.api.types.is_integer_dtype(volume)
+        or bool(np.all(volume == np.round(volume)))
+    ):
+        raise ConfigError(
+            "book_levels: the depth table's price must be integer ticks and its "
+            "volume whole lots, as the pipeline returns them, not the display "
+            "units display_result converts to."
+        )
     position = pd.Index(events["event_id"]).get_indexer(pd.Index(depth["event_id"]))
     if (position < 0).any():
         raise ConfigError(

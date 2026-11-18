@@ -1045,7 +1045,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   of the plot functions moved to `_utils`, so plot data no longer imports
   `pipeline`. `price_level_volume` has a new `warn_overdrawn` option, and
   the private `depth._book_levels` is now the public `depth.book_levels`, so
-  the LOBSTER loader uses no private `depth` functions. It still imports
+  the LOBSTER loader uses no private `depth` functions. `book_levels` checks
+  its columns and refuses a depth table in display units. It still imports
   `depth` and `quality`, as ADR 0001 allows.
   `quality.book_crossing` and `quality.CROSSED_TOLERANCE_PCT` are now in
   `quality.__all__` and on the Data quality API page.

@@ -12,6 +12,8 @@ filtering.
 depth row at a time. `DepthSummaryEngine` builds the depth summary on it, and
 `price_level_snapshots` replays it to give the book at many instants, so a
 snapshot's touch always equals the depth summary's at that instant.
+`book_levels` replays it too, and gives the best few levels of each side
+after every event, as integer arrays.
 
 ::: ob_analytics.depth.PriceLevelBook
 
