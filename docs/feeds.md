@@ -213,6 +213,11 @@ books that came without a venue time (`books_without_venue_time` in
 With one clock the two columns are equal, so `audit` does not run the clock
 checks. It says why in their place.
 
+A capture keeps each time to the precision the venue sent: it writes whole
+nanoseconds, so Bitstamp's microseconds are kept. Older captures (format
+version 1) wrote milliseconds, and their events in the same millisecond replay
+in the order they are in the file.
+
 Independent Reserve and Coinbase send a time with every message except the
 opening book. The opening book's rows carry the receive time in both columns,
 and the capture keeps both clocks. Those rows are marked as the opening book
@@ -319,7 +324,7 @@ Whether a trade's buy or sell comes from the venue or is worked out.
 
 - **Values:** from the venue; classified with Lee–Ready.
 - **Sources:** every live source reports it. A `depth_csv` file without a
-  `side` column is classified.
+  `direction` column (`side` in older files) is classified.
 - **Lets you conclude:** trade signs and flow toxicity (VPIN, order flow
   imbalance).
 - **Stops you concluding:** with a classified side, that each sign is right.
@@ -536,7 +541,7 @@ Notes on this table:
 | ccxt, Kalshi | — | — | venue (buy = the taker bought Yes) | — | polled; trades from before the opening book dropped |
 | `kalshi` (WebSocket) | — | — | venue (buy = the taker bought Yes) | — | trades from before the opening book dropped; a lost trade is counted in `meta.json` |
 | ccxt, Polymarket | — | — | venue | — | repeated trades removed |
-| `depth_csv` | — | — | the `side` column, or Lee–Ready | — | as recorded |
+| `depth_csv` | — | — | the `direction` column, or Lee–Ready | — | as recorded |
 
 Note on this table:
 

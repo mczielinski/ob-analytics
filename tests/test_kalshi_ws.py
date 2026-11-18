@@ -140,7 +140,7 @@ class TestYesBook:
                 },
             }
         )
-        assert [(r["side"], r["price"], r["volume"]) for r in rows] == [
+        assert [(r["direction"], r["price"], r["volume"]) for r in rows] == [
             ("bid", 0.40, 10.0),
             ("ask", 0.45, 7.0),
         ]
@@ -151,8 +151,8 @@ class TestYesBook:
         snapshot = next(f for f in _frames() if f["type"] == "orderbook_snapshot")
         rows = source._apply_snapshot(snapshot)
         assert len(rows) == source.snapshot_levels == 69 + 11
-        best_bid = max(r["price"] for r in rows if r["side"] == "bid")
-        best_ask = min(r["price"] for r in rows if r["side"] == "ask")
+        best_bid = max(r["price"] for r in rows if r["direction"] == "bid")
+        best_ask = min(r["price"] for r in rows if r["direction"] == "ask")
         assert best_bid < best_ask
         assert {r["sequence"] for r in rows} == {1}
 
@@ -174,7 +174,7 @@ class TestDeltas:
     def test_a_change_writes_the_new_absolute_size(self):
         source = _seeded()
         row = source._apply_delta(_delta(2, "yes", "0.4000", "-3.50"))
-        assert (row["side"], row["price"], row["volume"], row["sequence"]) == (
+        assert (row["direction"], row["price"], row["volume"], row["sequence"]) == (
             "bid",
             0.40,
             6.5,
@@ -184,7 +184,7 @@ class TestDeltas:
     def test_a_no_change_moves_the_yes_ask(self):
         source = _seeded()
         row = source._apply_delta(_delta(2, "no", "0.5500", "2.00"))
-        assert (row["side"], row["price"], row["volume"]) == ("ask", 0.45, 9.0)
+        assert (row["direction"], row["price"], row["volume"]) == ("ask", 0.45, 9.0)
 
     def test_a_change_to_zero_removes_the_level(self):
         source = _seeded()
@@ -258,8 +258,8 @@ class TestTrades:
         kind, buy, _ = source.parse(_trade(1, "yes"))
         _, sell, _ = source.parse(_trade(2, "no"))
         assert kind == "trade"
-        assert (buy["price"], buy["amount"], buy["side"]) == (0.82, 0.25, "buy")
-        assert sell["side"] == "sell"
+        assert (buy["price"], buy["volume"], buy["direction"]) == (0.82, 0.25, "buy")
+        assert sell["direction"] == "sell"
         assert buy["exchange_timestamp"] == pd.Timestamp(
             1794521522602, unit="ms", tz="UTC"
         )

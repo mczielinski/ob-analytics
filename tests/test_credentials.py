@@ -108,10 +108,10 @@ class _LeakySource:
                 "timestamp": ts,
                 "exchange_timestamp": ts,
                 "price": 100.0,
-                "amount": 0.5,
+                "volume": 0.5,
                 "buy_order_id": 1,
                 "sell_order_id": 2,
-                "side": "sell",
+                "direction": "sell",
             },
             None,
         )

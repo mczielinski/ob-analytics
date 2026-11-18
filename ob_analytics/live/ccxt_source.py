@@ -576,7 +576,7 @@ class CcxtSource:
                     yield {
                         "timestamp": received,
                         "exchange_timestamp": venue_ts,
-                        "side": side,
+                        "direction": side,
                         "price": price,
                         "volume": size,
                         "sequence": nonce,
@@ -854,7 +854,7 @@ class CcxtSource:
                     {
                         "timestamp": received,
                         "exchange_timestamp": venue_ts,
-                        "side": side,
+                        "direction": side,
                         "price": price,
                         "volume": size,
                         "sequence": nonce,
@@ -877,7 +877,7 @@ class CcxtSource:
         """Map a CCXT trade to the universal trade-event shape.
 
         Public trades carry no order IDs, so ``buy_order_id`` /
-        ``sell_order_id`` are left empty; ``side`` is the taker's side, which
+        ``sell_order_id`` are left empty; ``direction`` is the taker's side, which
         is CCXT's side reversed on a venue that names the maker's (see
         :data:`_MAKER_SIDE_VENUES`).
         """
@@ -890,10 +890,10 @@ class CcxtSource:
             "timestamp": received,
             "exchange_timestamp": _epoch_ms_to_ts(t.get("timestamp"), received),
             "price": float(t["price"]),
-            "amount": float(t["amount"]),
+            "volume": float(t["amount"]),
             "buy_order_id": "",
             "sell_order_id": "",
-            "side": side,
+            "direction": side,
             **self._identity(),
         }
 

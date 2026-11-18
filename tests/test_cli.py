@@ -1242,15 +1242,15 @@ def _ccxt_capture(folder: Path, *, declarations: dict | None = None) -> Path:
     for i, (side, price, volume, origin) in enumerate(_CCXT_BOOK):
         ts = t0 + pd.Timedelta(milliseconds=i)
         sink.write_depth(
-            {"timestamp": ts, "exchange_timestamp": ts, "side": side,
+            {"timestamp": ts, "exchange_timestamp": ts, "direction": side,
              "price": price, "volume": volume, "sequence": i + 1,
              "origin": origin}
         )  # fmt: skip
     ts = t0 + pd.Timedelta(milliseconds=len(_CCXT_BOOK))
     sink.write_trade(
         {"trade_id": "t1", "timestamp": ts, "exchange_timestamp": ts,
-         "price": 101.0, "amount": 1.0, "buy_order_id": "", "sell_order_id": "",
-         "side": "buy"}
+         "price": 101.0, "volume": 1.0, "buy_order_id": "", "sell_order_id": "",
+         "direction": "buy"}
     )  # fmt: skip
     extras = source_declarations(source) if declarations is None else declarations
     sink.finalize(

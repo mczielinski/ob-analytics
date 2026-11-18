@@ -989,11 +989,7 @@ def _close_segment_files(
     """
     files = repair_files(seg_dir)
     closed = files.orders_closed
-    last_row = (
-        None
-        if files.last_ms is None
-        else pd.Timestamp(files.last_ms, unit="ms", tz="UTC")
-    )
+    last_row = files.last_timestamp
     covered_to = max(
         (t for t in (last_row, segment.heartbeat) if t is not None), default=None
     )
@@ -1068,4 +1064,5 @@ def _write_provisional_meta(running: _Running) -> None:
     }
     meta.update(read_diagnostics(running.source))
     meta.update(running.sink.raw_diagnostics())
+    meta.update(running.sink.format_fields())
     write_record(running.sink.out_dir, meta)

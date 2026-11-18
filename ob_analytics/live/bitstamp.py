@@ -52,6 +52,7 @@ from ob_analytics.live._base import (
     RecordedGrid,
     UnmappedMessageError,
     epoch_ms_to_ts,
+    epoch_us_to_ts,
 )
 
 __all__ = [
@@ -115,6 +116,8 @@ class BitstampCapturer:
         # fields.
         self._open_orders = OpenOrders()
         self._snapshot_us: int = 0
+        # The instrument put on every event: set from the pair in ``snapshot``.
+        self._identity: dict[str, str] = {"venue": "bitstamp"}
 
         # WebSocket state -- opened in ``snapshot``, used in ``stream``.
         # The live connection is entered through an ``AsyncExitStack`` so it
@@ -161,6 +164,7 @@ class BitstampCapturer:
         with a warning, and ``diagnostics()`` reports
         ``snapshot_overlap: False``.
         """
+        self._identity = {"venue": "bitstamp", "symbol": config.pair}
         orders_channel = f"live_orders_{config.pair}"
         trades_channel = f"live_trades_{config.pair}"
 
@@ -212,11 +216,9 @@ class BitstampCapturer:
                 self.snapshot_fetches,
             )
 
-        snap_ms = (
-            self._snapshot_us // 1000 if self._snapshot_us else int(time.time() * 1000)
-        )
-
-        ts = epoch_ms_to_ts(snap_ms)
+        # Bitstamp sends microseconds; keep them.
+        snap_us = self._snapshot_us or int(time.time() * 1_000_000)
+        ts = epoch_us_to_ts(snap_us)
         for direction, side_key in (("bid", "bids"), ("ask", "asks")):
             for row in snap.get(side_key, ()):
                 try:
@@ -241,6 +243,7 @@ class BitstampCapturer:
                     "volume": volume,
                     "action": "created",
                     "direction": direction,
+                    **self._identity,
                 }
                 self.grid.fit(created)
                 yield created
@@ -264,6 +267,7 @@ class BitstampCapturer:
         :class:`~websockets.exceptions.ConnectionClosed`: this capture cannot
         continue past a disconnect (see the module notes).
         """
+        self._identity = {"venue": "bitstamp", "symbol": config.pair}
         orders_channel = f"live_orders_{config.pair}"
         trades_channel = f"live_trades_{config.pair}"
         deadline = time.monotonic() + config.minutes * 60.0
@@ -340,7 +344,7 @@ class BitstampCapturer:
     async def shutdown_synthetic_events(self) -> AsyncIterator[EventDict]:
         """Yield synthetic ``deleted`` events for every still-resting order."""
         at = epoch_ms_to_ts(int(time.time() * 1000))
-        for event in self._open_orders.close(at):
+        for event in self._open_orders.close(at, **self._identity):
             self.synthetic_deleted += 1
             yield event
 
@@ -483,15 +487,15 @@ class BitstampCapturer:
             self.pre_snapshot_skipped += 1
             return None
 
-        ex_ms = ex_us // 1000
         ev: EventDict = {
             "id": order_id,
             "timestamp": epoch_ms_to_ts(recv_ms),
-            "exchange_timestamp": epoch_ms_to_ts(ex_ms),
+            "exchange_timestamp": epoch_us_to_ts(ex_us),
             "price": price,
             "volume": volume,
             "action": action,
             "direction": direction,
+            **self._identity,
         }
         self.grid.fit(ev)
 
@@ -527,16 +531,16 @@ class BitstampCapturer:
             self.pre_snapshot_trades_skipped += 1
             return None
 
-        ex_ms = ex_us // 1000
         trade: EventDict = {
             "trade_id": trade_id,
             "timestamp": epoch_ms_to_ts(recv_ms),
-            "exchange_timestamp": epoch_ms_to_ts(ex_ms),
+            "exchange_timestamp": epoch_us_to_ts(ex_us),
             "price": price,
-            "amount": amount,
+            "volume": amount,
             "buy_order_id": buy_id,
             "sell_order_id": sell_id,
-            "side": side,
+            "direction": side,
+            **self._identity,
         }
         self.grid.fit(trade)
         return trade

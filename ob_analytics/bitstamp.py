@@ -43,7 +43,10 @@ from ob_analytics.capture_files import (
     ORDERS_NAME,
     TRADE_COLUMNS,
     TRADES_NAME,
+    csv_columns,
+    record_format,
 )
+from ob_analytics.capture_record import CURRENT_FORMAT, FORMAT_TIME_UNITS, read_format
 from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.protocols import (
     DataWriter,
@@ -103,8 +106,10 @@ class BitstampLoader:
     venue, symbol : str, optional
         Optional instrument identity.  When either is supplied, the loaded
         frame gains per-row ``venue`` / ``symbol`` columns; ``venue`` falls
-        back to ``"bitstamp"`` when only ``symbol`` is given.  Both ``None``
-        (the default) leaves the frame untagged.
+        back to ``"bitstamp"`` when only ``symbol`` is given.  Each one not
+        supplied is taken from the capture's ``meta.json`` when it records
+        one, so a replayed capture names its instrument.  With neither, the
+        frame is left untagged.
     """
 
     #: The source venue used to fill the ``venue`` column when identity tagging
@@ -153,6 +158,8 @@ class BitstampLoader:
         amount) has ``fill`` 0.
         """
         where = f"BitstampLoader.load({path})"
+        capture_format = read_format(path)
+        unit = capture_format.time_unit
         events = read_csv_file(path, where)
         validate_columns(
             events,
@@ -179,11 +186,11 @@ class BitstampLoader:
             events["direction"], "direction", where, allowed=BOOK_SIDE_DTYPE.categories
         )
         events["timestamp"] = checked_times(
-            events["timestamp"], _TIMESTAMP_UNIT, "timestamp", where
+            events["timestamp"], unit, "timestamp", where
         )
         events["exchange_timestamp"] = checked_times(
             events["exchange_timestamp"],
-            _TIMESTAMP_UNIT,
+            unit,
             "exchange_timestamp",
             where,
             required=False,
@@ -304,12 +311,12 @@ class BitstampLoader:
 
         events["raw_event_type"] = pd.NA
 
-        # Optional per-row instrument identity (issue #147); a no-op unless a
-        # venue/symbol was supplied for the run.
+        # Optional per-row instrument identity (issue #147): the run's, else
+        # what the capture recorded (issue #494); a no-op when neither names it.
         events = attach_instrument_identity(
             events,
-            venue=self._venue,
-            symbol=self._symbol,
+            venue=self._venue or capture_format.venue,
+            symbol=self._symbol or capture_format.symbol,
             default_venue=self._VENUE,
         )
 
@@ -346,10 +353,8 @@ class BitstampLoader:
 
 # ── BitstampTradeReader ───────────────────────────────────────────────
 
-
-#: The unit of the integer epoch timestamps in Bitstamp's CSV files, orders
-#: and trades alike.
-_TIMESTAMP_UNIT = "ms"
+#: The unit the writer saves times in: that of the current capture format.
+_WRITE_UNIT = FORMAT_TIME_UNITS[CURRENT_FORMAT]
 
 
 class BitstampTradeReader:
@@ -387,36 +392,35 @@ class BitstampTradeReader:
     def load(self, events: pd.DataFrame, path: Any) -> pd.DataFrame:
         file = self._resolve_trades_path(path)
         where = f"BitstampTradeReader.load({file})"
+        capture_format = read_format(file)
         raw = read_csv_file(file, where)
 
         if raw.empty:
             return empty_trades()
 
-        validate_columns(raw, set(TRADE_COLUMNS), "BitstampTradeReader.load")
-        for column, what in (("price", "price"), ("amount", "size")):
+        columns = csv_columns(TRADES_NAME, capture_format.version)
+        validate_columns(raw, set(columns), "BitstampTradeReader.load")
+        # Read a format version 1 file under the current names.
+        raw = raw.rename(columns=dict(zip(columns, TRADE_COLUMNS, strict=True)))
+        for column, what in (("price", "price"), ("volume", "size")):
             raw[column] = finite_floats(raw[column], what, where)
         # A trade with no known side or order (as this format's writer saves
         # one from a feed that does not name them) leaves the cell empty.
         checked_labels(
-            raw["side"],
-            "side",
+            raw["direction"],
+            "direction",
             where,
             allowed=TRADE_SIDE_DTYPE.categories,
             required=False,
         )
-        recv_ms = checked_times(raw["timestamp"], _TIMESTAMP_UNIT, "timestamp", where)
+        received = checked_times(
+            raw["timestamp"], capture_format.time_unit, "timestamp", where
+        )
 
-        # `side` is the taker side: "buy" => taker is the buyer.
-        taker_id = np.where(
-            raw["side"].astype(str) == "buy",
-            raw["buy_order_id"],
-            raw["sell_order_id"],
-        )
-        maker_id = np.where(
-            raw["side"].astype(str) == "buy",
-            raw["sell_order_id"],
-            raw["buy_order_id"],
-        )
+        # `direction` is the taker side: "buy" => taker is the buyer.
+        taker_buys = raw["direction"].astype(str) == "buy"
+        taker_id = np.where(taker_buys, raw["buy_order_id"], raw["sell_order_id"])
+        maker_id = np.where(taker_buys, raw["sell_order_id"], raw["buy_order_id"])
 
         ev_lookup = self._build_lookup(events)
 
@@ -425,10 +429,10 @@ class BitstampTradeReader:
         # floats.
         amounts = pd.Series(
             to_grid(
-                raw["amount"],
+                raw["volume"],
                 self._config.lot_size,
                 kind="size",
-                column="amount",
+                column="volume",
                 where=where,
             ),
             index=raw.index,
@@ -446,7 +450,7 @@ class BitstampTradeReader:
             {
                 # ``.array`` keeps the tz-aware UTC dtype (``.values`` would
                 # drop the zone to a naive numpy datetime64).
-                "timestamp": recv_ms.array,
+                "timestamp": received.array,
                 # Trade prints share the events' integer-tick price grid (#155).
                 # An execution can print between two ticks, so its price is
                 # rounded to the nearest tick, not checked (issue #500).
@@ -460,7 +464,7 @@ class BitstampTradeReader:
                 ),
                 "volume": amounts.values,
                 "direction": pd.Categorical(
-                    raw["side"].astype(str), dtype=TRADE_SIDE_DTYPE
+                    raw["direction"].astype(str), dtype=TRADE_SIDE_DTYPE
                 ),
                 "maker_event_id": maker_event_id,
                 "taker_event_id": taker_event_id,
@@ -648,6 +652,11 @@ class BitstampWriter:
         columns are written too when the events carry them, so a capture
         read and written again keeps them.
 
+        The files are in the current capture format (times in nanoseconds),
+        and the folder's ``meta.json`` records its version: one is written
+        when there is none, and the other fields of one already there are
+        kept.
+
         Parameters
         ----------
         data : dict of str to DataFrame
@@ -671,9 +680,9 @@ class BitstampWriter:
         p = Path(dest) / ORDERS_NAME
         columns: dict[str, Any] = {
             "id": events["id"],
-            "timestamp": datetime_to_epoch(events["timestamp"], _TIMESTAMP_UNIT),
+            "timestamp": datetime_to_epoch(events["timestamp"], _WRITE_UNIT),
             "exchange_timestamp": datetime_to_epoch(
-                events["exchange_timestamp"], _TIMESTAMP_UNIT
+                events["exchange_timestamp"], _WRITE_UNIT
             ),
             # Restore the quote-currency float from integer ticks (#155).
             "price": ticks_to_price(
@@ -703,6 +712,17 @@ class BitstampWriter:
         trades = data.get("trades")
         if trades is not None:
             self._write_companion_trades(trades, p.parent / TRADES_NAME)
+        elif (p.parent / TRADES_NAME).is_file() and (
+            read_format(p.parent).version != CURRENT_FORMAT
+        ):
+            logger.warning(
+                "BitstampWriter: {} is left as it was; this folder is now read "
+                "in capture format {}, so a trades.csv from an older capture "
+                "will not load",
+                p.parent / TRADES_NAME,
+                CURRENT_FORMAT,
+            )
+        record_format(p.parent)
         return p
 
     def _write_companion_trades(self, trades: pd.DataFrame, dest: Path) -> None:
@@ -718,27 +738,27 @@ class BitstampWriter:
         side = trades["direction"].astype(str)
         buy_order_id = np.where(side == "buy", trades["taker"], trades["maker"])
         sell_order_id = np.where(side == "buy", trades["maker"], trades["taker"])
-        # The capture format records epoch-millisecond timestamps; go through the
-        # canonical inverse so a tz-aware UTC column round-trips cleanly.
-        ts_ms = datetime_to_epoch(trades["timestamp"], "ms")
+        # Go through the canonical inverse so a tz-aware UTC column
+        # round-trips cleanly.
+        ts = datetime_to_epoch(trades["timestamp"], _WRITE_UNIT)
         out = pd.DataFrame(
             {
                 "trade_id": np.arange(1, len(trades) + 1, dtype=np.int64),
-                "timestamp": ts_ms,
-                "exchange_timestamp": ts_ms,
+                "timestamp": ts,
+                "exchange_timestamp": ts,
                 "price": ticks_to_price(
                     trades["price"],
                     self._config.tick_size,
                     decimals=self._config.price_decimals,
                 ),
-                "amount": lots_to_size(
+                "volume": lots_to_size(
                     trades["volume"],
                     self._config.lot_size,
                     decimals=self._config.volume_decimals,
                 ),
                 "buy_order_id": buy_order_id,
                 "sell_order_id": sell_order_id,
-                "side": side.to_numpy(),
+                "direction": side.to_numpy(),
             }
         )
         out.to_csv(dest, index=False)

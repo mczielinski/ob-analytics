@@ -82,10 +82,10 @@ class _FakeCapturer:
                 "timestamp": ts,
                 "exchange_timestamp": ts,
                 "price": 100.5,
-                "amount": 0.5,
+                "volume": 0.5,
                 "buy_order_id": 3,
                 "sell_order_id": 4,
-                "side": "buy",
+                "direction": "buy",
             },
             {"raw": "frame-2"},
         )
@@ -127,7 +127,7 @@ class _FakeL2Capturer:
             yield {
                 "timestamp": ts,
                 "exchange_timestamp": ts,
-                "side": side,
+                "direction": side,
                 "price": price,
                 "volume": volume,
             }
@@ -142,7 +142,7 @@ class _FakeL2Capturer:
             {
                 "timestamp": ts,
                 "exchange_timestamp": ts,
-                "side": "bid",
+                "direction": "bid",
                 "price": 100.0,
                 "volume": 7.0,
             },
@@ -155,10 +155,10 @@ class _FakeL2Capturer:
                 "timestamp": ts,
                 "exchange_timestamp": ts,
                 "price": 101.0,
-                "amount": 1.0,
+                "volume": 1.0,
                 "buy_order_id": 0,
                 "sell_order_id": 0,
-                "side": "buy",
+                "direction": "buy",
             },
             {"raw": "t1"},
         )
@@ -168,7 +168,7 @@ class _FakeL2Capturer:
             {
                 "timestamp": ts,
                 "exchange_timestamp": ts,
-                "side": "ask",
+                "direction": "ask",
                 "price": 101.0,
                 "volume": 0.0,
             },
@@ -564,10 +564,10 @@ class _ConfirmingCapturer(_FakeCapturer):
                 "timestamp": ts,
                 "exchange_timestamp": ts,
                 "price": 101.0,
-                "amount": 1.0,
+                "volume": 1.0,
                 "buy_order_id": 9,
                 "sell_order_id": 2,
-                "side": "buy",
+                "direction": "buy",
             },
             None,
         )

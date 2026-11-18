@@ -90,19 +90,24 @@ _L3_WINDOW: dict[str, int] = {"BITSTAMP": 100}
 _FILL_GRACE_S = 2.0
 
 #: How far before the next book a held opening book is placed, in seconds (see
-#: ``_release_held_book``).  A capture writes its clocks in whole milliseconds,
-#: so the gap must be at least one for the order to survive.
+#: ``_release_held_book``).  Captures made before the format kept nanoseconds
+#: wrote whole milliseconds, so the gap is one, to keep the same order there.
 _PLACE_BEFORE_S = 0.001
 
 
 def _epoch_s_to_ts(seconds: Any) -> pd.Timestamp:
     """cryptofeed timestamps are float epoch *seconds*; ``None`` uses the time now.
 
-    Both branches land on the canonical tz-aware UTC nanosecond clock.
+    Both branches land on the canonical tz-aware UTC nanosecond clock.  A float
+    of today's epoch seconds holds about a microsecond, so the time is rounded
+    to whole microseconds: the digits past that are float error, not the
+    venue's.
     """
     if seconds is None:
         return pd.Timestamp.now(tz="UTC").as_unit("ns")
-    return pd.Timestamp(float(seconds), unit="s", tz="UTC").as_unit("ns")
+    return pd.Timestamp(round(float(seconds) * 1_000_000), unit="us", tz="UTC").as_unit(
+        "ns"
+    )
 
 
 def _clocks(venue: Any, receipt: Any) -> dict[str, pd.Timestamp]:
@@ -816,7 +821,12 @@ class CryptofeedSource:
         delta = getattr(book, "delta", None)
         if _has_entries(delta):
             rows = [
-                {"side": side, "price": float(price), "volume": float(size), **common}
+                {
+                    "direction": side,
+                    "price": float(price),
+                    "volume": float(size),
+                    **common,
+                }
                 for side in ("bid", "ask")
                 for price, size in delta.get(side) or ()
             ]
@@ -833,7 +843,7 @@ class CryptofeedSource:
     ) -> list[EventDict]:
         """Diff a whole L2 book against the previous one into depth rows."""
         return [
-            {"side": side, "price": price, "volume": size, **common}
+            {"direction": side, "price": price, "volume": size, **common}
             for side in ("bid", "ask")
             for price, size in diff_levels(
                 self._last_l2[side], levels.get(side, {}).items()
@@ -1209,7 +1219,7 @@ class CryptofeedSource:
         cryptofeed reports price and amount as ``Decimal``; they are floated
         for the shared schema.  The buy and sell order IDs come from the raw
         frame where the venue sends them (see ``_trade_order_ids``) and stay
-        empty where it does not.  ``side`` is the taker side.  ``timestamp`` is
+        empty where it does not.  ``direction`` is the taker side.  ``timestamp`` is
         the receipt time and ``exchange_timestamp`` the venue's (see
         ``_clocks``).
         """
@@ -1218,10 +1228,10 @@ class CryptofeedSource:
             "trade_id": getattr(trade, "id", "") or "",
             **_clocks(getattr(trade, "timestamp", None), receipt_timestamp),
             "price": float(trade.price),
-            "amount": float(trade.amount),
+            "volume": float(trade.amount),
             "buy_order_id": buy_order_id,
             "sell_order_id": sell_order_id,
-            "side": getattr(trade, "side", "") or "",
+            "direction": getattr(trade, "side", "") or "",
             **self._payload_identity(trade),
         }
 

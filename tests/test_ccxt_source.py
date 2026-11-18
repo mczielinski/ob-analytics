@@ -157,7 +157,7 @@ class TestDiffBook:
         }
         ts = pd.Timestamp("2025-01-01", tz="UTC")
         rows = [r for r, _raw in cap._diff_book(book, ts)]
-        got = {(r["side"], r["price"], r["volume"]) for r in rows}
+        got = {(r["direction"], r["price"], r["volume"]) for r in rows}
         assert got == {
             ("bid", 100.0, 7.0),  # size change
             ("bid", 98.0, 2.0),  # new level
@@ -256,8 +256,8 @@ class TestMapTrade:
         )
         assert ev["trade_id"] == "abc"
         assert ev["price"] == 100.5
-        assert ev["amount"] == 0.5
-        assert ev["side"] == "buy"
+        assert ev["volume"] == 0.5
+        assert ev["direction"] == "buy"
         assert ev["buy_order_id"] == ""  # public trades carry no order IDs
         assert ev["exchange_timestamp"] == pd.Timestamp(
             1_700_000_000_000, unit="ms", tz="UTC"
@@ -445,7 +445,7 @@ class TestWebsocketTrades:
         f1 = {"id": "0xtx", "timestamp": 2_000, "price": 100.0, "amount": 1.0}
         f2 = {"id": "0xtx", "timestamp": 2_000, "price": 100.0, "amount": 3.0}
         trades, meta = self._capture([[f1, f2]], tmp_path)
-        assert trades["amount"].tolist() == [1.0, 3.0]
+        assert trades["volume"].tolist() == [1.0, 3.0]
         assert meta["duplicate_trades"] == 0
 
 
@@ -474,13 +474,13 @@ class TestCoinbaseTradeSide:
 
     def test_coinbase_side_is_reversed(self, tmp_path):
         trades, meta = self._capture("coinbase", tmp_path)
-        assert trades["side"].tolist() == ["sell"]
+        assert trades["direction"].tolist() == ["sell"]
         assert meta["trade_side_reversed"] is True
 
     @pytest.mark.parametrize("venue", ["coinbaseexchange", "kraken"])
     def test_other_venues_keep_ccxts_side(self, venue, tmp_path):
         trades, meta = self._capture(venue, tmp_path)
-        assert trades["side"].tolist() == ["buy"]
+        assert trades["direction"].tolist() == ["buy"]
         assert meta["trade_side_reversed"] is False
 
     def test_a_missing_side_stays_empty(self, tmp_path):
@@ -489,7 +489,7 @@ class TestCoinbaseTradeSide:
         cap = _source(ex)
         asyncio.run(_collect_snapshot(cap, _cfg(tmp_path)))
         ev = cap._map_trade({**_COINBASE_TRADE, "side": None})
-        assert ev["side"] == ""
+        assert ev["direction"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -986,7 +986,9 @@ class TestClocks:
 
         written = pd.read_csv(out / "depth.csv")
         assert written["timestamp"].is_monotonic_increasing
-        assert list(written["exchange_timestamp"]) == [1_000, 1_000, 3_000, 2_000]
+        assert list(written["exchange_timestamp"]) == [
+            t * 1_000_000 for t in (1_000, 1_000, 3_000, 2_000)
+        ]
         # Replay applies the bid sizes 5, 6, 7 in the order they arrived.
         depth = DepthCsvLoader().load(out / "depth.csv")
         bids = depth.loc[depth["direction"] == "bid", "volume"].tolist()

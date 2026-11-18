@@ -600,18 +600,35 @@ def _keep_capture_record(data_path: Path, output: Path) -> None:
 
     Input without a record removes any ``meta.json`` an earlier run left in
     *output*, so a reused output directory never carries another capture's
-    record.
+    record.  When *output* holds capture CSV files, the record keeps the
+    format version their writer recorded, or none when the writer recorded
+    none, so they are read back in the unit they were written in.
     """
-    from ob_analytics.capture_record import RECORD_NAME, record_path
+    from ob_analytics.capture_files import book_file
+    from ob_analytics.capture_record import (
+        FORMAT,
+        RECORD_NAME,
+        read_fields,
+        record_path,
+        write_record,
+    )
 
     meta = record_path(data_path)
     dest = output / RECORD_NAME
     if meta.is_file() and meta.resolve() == dest.resolve():
         return
+    written = (read_fields(output) or {}).get(FORMAT)
     if meta.is_file():
         dest.write_bytes(meta.read_bytes())
     else:
         dest.unlink(missing_ok=True)
+    if book_file(output) is not None:
+        fields = read_fields(output) or {}
+        if fields.get(FORMAT) != written:
+            fields.pop(FORMAT, None)
+            if written is not None:
+                fields[FORMAT] = written
+            write_record(output, fields)
 
 
 def _load_saved_result(data_path: Path, *, source: Any = None) -> Any:

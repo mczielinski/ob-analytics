@@ -13,7 +13,10 @@ back, and this module owns those:
 * how many times the venue's sequence started again
   (``sequence_restarts``), which ``audit`` does not count as faults;
 * the instrument's price and size steps (``tick_size``, ``lot_size``), which
-  a replay needs to put prices and sizes on the right grid.
+  a replay needs to put prices and sizes on the right grid;
+* the version of the file format (``capture_format``), which says the unit of
+  the times in the CSV files, and the instrument (``venue``, ``symbol``),
+  which a replay puts on every row (see :func:`read_format`).
 
 The capture writes the record with :func:`write_record`, and
 :func:`read_record` reads it back as a :class:`CaptureRecord`.
@@ -40,6 +43,7 @@ from loguru import logger
 
 from ob_analytics._secrets import redact
 from ob_analytics.config import instrument_fields
+from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import (
     Clocks,
     FeedDeclarations,
@@ -55,8 +59,10 @@ from ob_analytics.protocols import (
 )
 
 __all__ = [
+    "CaptureFormat",
     "CaptureRecord",
     "read_fields",
+    "read_format",
     "read_instrument",
     "read_record",
     "record_path",
@@ -80,6 +86,19 @@ TICK_SIZE = "tick_size"
 LOT_SIZE = "lot_size"
 LEVEL = "level"
 REPLAY_SOURCE = "replay_source"
+FORMAT = "capture_format"
+VENUE = "venue"
+SYMBOL = "symbol"
+
+#: The version of the capture file format this version writes.  Version 1
+#: (no ``capture_format`` in ``meta.json``) wrote times in milliseconds, and
+#: named the side and size ``side`` and ``amount`` in ``trades.csv`` and
+#: ``depth.csv``.  Version 2 writes times in nanoseconds, names them
+#: ``direction`` and ``volume`` in every file, and records the instrument.
+CURRENT_FORMAT = 2
+
+#: The unit of the integer epoch times in the CSV files of each format version.
+FORMAT_TIME_UNITS: dict[int, str] = {1: "ms", 2: "ns"}
 
 #: The offline source that reads the files a capture writes at each level:
 #: ``orders.csv`` is in the Bitstamp format, ``depth.csv`` in the price-level
@@ -331,6 +350,81 @@ def read_instrument(path: Any) -> dict[str, Any]:
     return instrument_fields(
         tick_size=_step(fields, TICK_SIZE), lot_size=_step(fields, LOT_SIZE)
     )
+
+
+@dataclass(frozen=True)
+class CaptureFormat:
+    """How the files of a capture are written, and the instrument they hold.
+
+    Attributes
+    ----------
+    version : int
+        The version of the file format: ``1`` for a capture whose
+        ``meta.json`` records none (a capture made before versions were
+        recorded, or input that is not a capture).
+    venue, symbol : str or None
+        The instrument the capture recorded; ``None`` when it recorded none.
+    """
+
+    version: int = 1
+    venue: str | None = None
+    symbol: str | None = None
+
+    @property
+    def time_unit(self) -> str:
+        """The unit of the integer epoch times in the CSV files: ``"ms"`` or ``"ns"``."""
+        return FORMAT_TIME_UNITS[self.version]
+
+
+def read_format(path: Any) -> CaptureFormat:
+    """Return how the files of the capture at *path* are written.
+
+    Parameters
+    ----------
+    path
+        As for :func:`read_record`.
+
+    Returns
+    -------
+    CaptureFormat
+        The recorded format version, venue and symbol.  Version 1 when there
+        is no ``meta.json``, or it records no version.
+
+    Raises
+    ------
+    ConfigError
+        If the capture was written in a format this version does not know: a
+        later ob-analytics made it.
+    """
+    if not isinstance(path, str | os.PathLike):
+        return CaptureFormat()
+    fields = _readable_fields(path)
+    version = fields.get(FORMAT, 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        warnings.warn(
+            f"{record_path(path)}: {FORMAT} {version!r} is not a format version; "
+            "the files are read as version 1.",
+            UserWarning,
+            stacklevel=2,
+        )
+        version = 1
+    if version not in FORMAT_TIME_UNITS:
+        raise ConfigError(
+            f"{record_path(path)}: the capture is in format version {version}, "
+            f"and this version of ob-analytics reads up to {CURRENT_FORMAT}. "
+            "Upgrade ob-analytics to read it."
+        )
+    return CaptureFormat(
+        version=version,
+        venue=_text(fields, VENUE),
+        symbol=_text(fields, SYMBOL),
+    )
+
+
+def _text(fields: dict[str, Any], key: str) -> str | None:
+    """A recorded name, or ``None`` when absent or not a non-empty string."""
+    value = fields.get(key)
+    return value if isinstance(value, str) and value else None
 
 
 def _enum(fields: dict[str, Any], key: str, kind: type[_E], where: Path) -> _E | None:
