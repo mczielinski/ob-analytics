@@ -124,7 +124,7 @@ class PipelineResult:
 
     Analytic outputs (VPIN, OFI, Kyle's λ) are intentionally **not** stored
     here — compute them post-pipeline from ``trades`` and append them to the
-    gallery model's ``analytics`` (build panels with the ``*_panel`` helpers).
+    gallery model's ``analytics`` (build cards with the ``*_card`` helpers).
 
     Attributes
     ----------
@@ -544,7 +544,7 @@ class Pipeline:
 
         if self._source.level is Level.L2:
             # A price-level feed has no per-order identity, so the per-order
-            # stages (set_order_types, order_aggressiveness, queue) are skipped
+            # stages (set_order_types, order_aggressiveness) are skipped
             # and ``events`` comes back empty but schema-valid.
             tables = {"events": empty_events(), "trades": trades, "depth": rows}
             _depth_metrics(tables, config)
@@ -726,7 +726,7 @@ class Pipeline:
                 like,
                 trades,
                 config,
-                ParquetAppender(output, config, declarations, counts),
+                ParquetAppender(output, config, declarations, counts, level=level),
                 carry=carry,
             )
 

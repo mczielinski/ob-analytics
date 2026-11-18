@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -20,6 +21,7 @@ from loguru import logger
 
 from ob_analytics._utils import _UNSET, require_per_order_events, window_start
 from ob_analytics.depth import (
+    _mid_price,
     _readable_mid,
     book_imbalance,
     filter_depth,
@@ -919,7 +921,7 @@ def prepare_depth_heatmap_data(
         spread = readable_quotes(spread).sort_values("timestamp", kind="stable")
         if show_mp and {"best_bid_price", "best_ask_price"} <= set(spread.columns):
             spread = spread.assign(
-                midprice=(spread["best_bid_price"] + spread["best_ask_price"]) / 2
+                midprice=_mid_price(spread["best_bid_price"], spread["best_ask_price"])
             )
         if price_from is None:
             price_from = _price_bound(0.995 * spread["best_bid_price"].min())
@@ -2470,14 +2472,12 @@ def prepare_book_replay_data(
     needed = span // step + 1
     if needed > max_frames:
         widened = span / max(max_frames - 1, 1)
-        logger.warning(
-            "A replay of {} at one frame per {} needs {} frames, more than "
-            "max_frames={}; using one frame per {} instead.",
-            span,
-            step,
-            needed,
-            max_frames,
-            widened,
+        warnings.warn(
+            f"A replay of {span} at one frame per {step} needs {needed} frames, "
+            f"more than max_frames={max_frames}; using one frame per {widened} "
+            "instead.",
+            UserWarning,
+            stacklevel=2,
         )
         step = widened
     instants = (

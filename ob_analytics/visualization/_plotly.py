@@ -2322,13 +2322,6 @@ def plotly_order_flow_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
     return fig
 
 
-def _hex_to_rgba(hexc: str, alpha: float) -> str:
-    """``"#0072B2"`` + alpha -> ``"rgba(0,114,178,0.5)"`` for plotly fills."""
-    h = hexc.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
-
-
 def plotly_window_measure(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render one value per window: the Amihud and Roll faces.
 
@@ -2417,7 +2410,7 @@ def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
             mode="lines",
             line={"color": pal.effective_spread, "width": 2},
             fill="tonexty",
-            fillcolor=_hex_to_rgba(pal.buy, 0.25),
+            fillcolor=_rgba(pal.buy, 0.25),
             name="Effective spread",
             hovertemplate="Time: %{x}<br>Effective: %{y:.2f} bps<extra></extra>",
         )
@@ -2470,7 +2463,7 @@ def plotly_ofi_by_window(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
                         y=height,
                         fill="tozeroy",
                         mode="none",
-                        fillcolor=_hex_to_rgba(color, alpha),
+                        fillcolor=_rgba(color, alpha),
                         hoverinfo="skip",
                         showlegend=False,
                     ),

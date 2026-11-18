@@ -111,33 +111,6 @@ def _interval_sums_sorted(
     return sums
 
 
-def _interval_sums_sparse(
-    levels: dict[int, float],
-    best: int,
-    side: int,
-    range_len: int,
-    breaks: np.ndarray,
-) -> np.ndarray:
-    """Sum active book volume into the bins delimited by *breaks*.
-
-    Dict adapter over :func:`_interval_sums_sorted`, kept for the dense
-    cumsum oracle test; the engine hot path holds price-sorted arrays and
-    calls the core directly.
-    """
-    idx_list: list[int] = []
-    vol_list: list[float] = []
-    for p, v in levels.items():
-        idx = (p - best) if side == 1 else (best - p)
-        if 0 <= idx < range_len:
-            idx_list.append(idx)
-            vol_list.append(v)
-
-    order = np.argsort(idx_list, kind="stable")
-    idxs = np.asarray(idx_list)[order]
-    vols = np.asarray(vol_list, dtype=np.float64)[order]
-    return _interval_sums_sorted(idxs, vols, range_len, breaks)
-
-
 def _insert(values: np.ndarray, i: int, value: float) -> np.ndarray:
     """``np.insert(values, i, value)`` for a 1-D array, without its overhead."""
     out = np.empty(values.size + 1, dtype=values.dtype)
@@ -1309,10 +1282,20 @@ def _readable_rows(quotes: pd.DataFrame) -> np.ndarray:
     return _quoted(bid) & _quoted(ask) & (bid <= ask)
 
 
+def _mid_price(bid: pd.Series | np.ndarray, ask: pd.Series | np.ndarray) -> np.ndarray:
+    """The plain mid-price: the average of the best bid and the best ask.
+
+    This is the package's one mid-price formula.  It does not test the
+    quote; callers that need only readable rows apply
+    :func:`readable_quotes` or :func:`_readable_mid`.
+    """
+    return (np.asarray(bid, dtype=float) + np.asarray(ask, dtype=float)) / 2.0
+
+
 def _readable_mid(quotes: pd.DataFrame) -> np.ndarray:
     """The midpoint of each row of *quotes*, ``NaN`` where it is not readable."""
     bid, ask = _bid_ask(quotes)
-    return np.where(_readable_rows(quotes), (bid + ask) / 2.0, np.nan)
+    return np.where(_readable_rows(quotes), _mid_price(bid, ask), np.nan)
 
 
 # ── Fair-value / pressure signals ─────────────────────────────────────

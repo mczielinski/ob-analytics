@@ -6,6 +6,7 @@ and scales its text by ``context`` x ``font_scale``.
 """
 
 import json
+import warnings
 
 import matplotlib
 
@@ -27,7 +28,6 @@ from ob_analytics.visualization import (
     plot,
     prepare,
 )
-from tests._logging import warnings_logged
 
 # Colours no default palette field uses, so finding them in a figure proves
 # the theme's palette reached the renderer.
@@ -234,10 +234,10 @@ class TestThemeDispatch:
             return ("drawn", data)
 
         _register_probe(legacy)
-        with warnings_logged() as messages:
+        # A UserWarning, since the package's logger is off by default (#510).
+        with pytest.warns(UserWarning, match="takes no theme="):
             out = plot("probe", backend="probe", theme=PlotTheme(), x=1)
         assert out == ("drawn", {"x": 1})
-        assert any("takes no theme=" in m for m in messages)
 
     def test_theme_reaches_a_renderer_that_accepts_it(self) -> None:
         theme = PlotTheme(context="talk")
@@ -262,9 +262,9 @@ class TestThemeDispatch:
             return "drawn"
 
         _register_probe(legacy)
-        with warnings_logged() as messages:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
             assert plot("probe", backend="probe") == "drawn"
-        assert messages == []
 
 
 # ---------------------------------------------------------------------------

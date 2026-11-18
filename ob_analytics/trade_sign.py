@@ -51,7 +51,12 @@ from ob_analytics._utils import (
     taker_codes,
     validate_non_empty,
 )
-from ob_analytics.depth import _BID_ASK_COLUMNS, _bid_ask_pair, readable_quotes
+from ob_analytics.depth import (
+    _BID_ASK_COLUMNS,
+    _bid_ask_pair,
+    _mid_price,
+    readable_quotes,
+)
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.schemas import TRADE_SIDE_DTYPE, time_order_keys, validate_columns
 
@@ -602,9 +607,7 @@ def _readable_mids(
                 f"({', '.join('/'.join(p) for p in _BID_ASK_COLUMNS)}). "
                 f"Available columns: {sorted(quotes.columns)}"
             )
-        bid = readable[pair[0]].to_numpy(dtype=np.float64)
-        ask = readable[pair[1]].to_numpy(dtype=np.float64)
-        mid = 0.5 * (bid + ask)
+        mid = _mid_price(readable[pair[0]], readable[pair[1]])
     # Dropped rather than kept as NaN, so a reader reaches the last quote that
     # had a midpoint instead of reporting "no mid" for the instant.
     usable = ~np.isnan(mid) & readable["timestamp"].notna().to_numpy()

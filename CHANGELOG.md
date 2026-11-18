@@ -517,6 +517,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   prices or sizes that records neither is warned about. `load_result` reads
   Parquet folders only, and refuses a pickle, which keeps no config. The key is
   optional, so the schema version stays `4.0` and older readers ignore it.
+- **A saved run records its level** (#510). `save_data(result, path)` writes
+  the run's level, `"L2"` or `"L3"`, under the new key `ob_analytics_level`,
+  and `load_result` reads it back. Before, `load_result` took L2 from an empty
+  events table, so a per-order run with no events came back as L2. A folder
+  without the key, written by an older version, still gets its level from the
+  events table. The key is optional, so the schema version stays `4.0`.
 - **`ob_analytics.capture_record` owns a capture's `meta.json`** (#346).
   `read_record(path)` returns a typed `CaptureRecord`: the source that made the
   capture, its feed type, trade attribution, sequence kind and clocks, the
@@ -1103,6 +1109,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   can differ in the last bit of a float, because a bucket's volume is now
   added up from its parts. A `compute_vpin(sign_method="bvc")` call with a bad
   `bucket_volume` now reports the error under `compute_vpin`.
+- **The mid-price formula is written once** (#510). The feature table, the
+  trade signs, the book signals and the depth heatmap's mid line use one
+  helper in `depth.py`. The Plotly backend has one colour converter, and a
+  helper that only a test used has moved into that test. No output changes.
 
 - **Every event loader casts through `EVENT_DTYPES`, and the validators check
   dtypes** (#379). The Bitstamp, LOBSTER and Databento loaders build their
@@ -1732,6 +1742,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   account for all the printed trade volume, orders `set_order_types` cannot
   classify, Bitstamp duplicate cancellations, a LOBSTER run with no
   orderbook file, and a Parquet file with no schema version.
+- **Plot warnings reach a Python user** (#510). Three plot warnings still went
+  to the logger the package turns off. Each is now a `UserWarning`: a theme
+  that a renderer cannot take, a hidden-liquidity overlay that fails and is
+  left out of the gallery, and a book replay whose frame interval is widened
+  to fit `max_frames`.
 - **A run with no trades offers no trade metric** (#399).
   `available_concepts` listed VPIN, Kyle's λ, order flow imbalance and the
   cost metrics, which cannot be drawn, and `result.metrics()` raised.
