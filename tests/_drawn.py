@@ -31,12 +31,21 @@ def drawn(fig: Any) -> Counter[str]:
 
     if isinstance(fig, MplFigure):
         return _matplotlib(fig)
-    module = type(fig).__module__
-    if module.startswith("plotly"):
+    # The book replay draws on a Figure subclass of the package's own module,
+    # so a plotly figure is told by its base class, not its module.
+    if _is_plotly(fig):
         return _plotly(fig)
-    if module.startswith("bokeh"):
+    if type(fig).__module__.startswith("bokeh"):
         return _bokeh(fig)
     raise TypeError(f"drawn() does not know a {type(fig).__name__}")
+
+
+def _is_plotly(fig: Any) -> bool:
+    try:
+        from plotly.basedatatypes import BaseFigure
+    except ImportError:
+        return False
+    return isinstance(fig, BaseFigure)
 
 
 def _add(counts: Counter[str], kind: str, points: int) -> None:
