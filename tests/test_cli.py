@@ -1072,8 +1072,9 @@ class TestCaptureSubcommand:
 
     def test_old_flag_names_are_refused(self, cli_runner, tmp_path):
         r = cli_runner(
-            "capture", "ccxt", "--exchange", "kraken", "--out", str(tmp_path / "c")
-        )
+            "capture", "ccxt", "--pair", "BTC/USD", "--exchange", "kraken",
+            "--out", str(tmp_path / "c"),
+        )  # fmt: skip
         assert r.returncode == 2
         assert "unrecognized arguments" in r.stderr
 
