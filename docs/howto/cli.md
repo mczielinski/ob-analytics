@@ -67,6 +67,8 @@ Parquet, verify round-trip I/O, and build an HTML plot gallery.
 | `--depth-bps` | `PipelineConfig(depth_bps=...)` | Width of each depth bin, in basis points |
 | `--trading-date` | `RunContext(trading_date=...)` | The date of a session-relative feed (LOBSTER) |
 | `--session-tz` | `RunContext(session_tz=...)` | The venue's time zone for a session-relative feed |
+| `--symbol` | `RunContext(symbol=...)` | The instrument, in a `symbol` column on each row |
+| `--venue` | `RunContext(venue=...)` | The venue, in a `venue` column on each row |
 
 ```bash
 ob-analytics process capture/ --tick-size 0.001 --lot-size 0.0001
@@ -77,6 +79,26 @@ A flag left out keeps the source's default. A capture's tick size and lot size
 come from its `meta.json` unless `--tick-size` or `--lot-size` is given.
 `audit --from-parquet` refuses these flags: a saved result keeps the settings
 of its own run.
+
+## Choose the source and its settings
+
+`--source` names the source that reads the input. A live capture needs none:
+its `meta.json` names the source that reads it back, such as `depth_csv` for a
+ccxt capture. For any other input the default is `bitstamp`. If `--source`
+reads another level than the capture recorded (`bitstamp` on an L2 capture,
+say), the command stops and names both.
+
+Each field of the source's settings is a flag, as for `capture`. Add
+`--help` after the path, or after `--source`, to list them:
+
+```bash
+ob-analytics process file.dbn.zst --source databento --help
+ob-analytics process file.dbn.zst --source databento --instrument-id 1108 -o out/
+ob-analytics process prices.csv --source depth_csv --price-divisor 100 -o out/
+```
+
+The [flag reference](../api/cli-flags.md) lists the settings flags of each
+built-in source.
 
 ## Save in another format
 

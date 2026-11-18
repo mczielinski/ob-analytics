@@ -165,7 +165,7 @@ combine-as-imports = true
 include = ["tests/test_backtest_parity.py"]
 
 [tool.ty.overrides.rules]
-unresolved-import = "ignore"
+import-not-found = "ignore"
 
 [tool.hatch.build.targets.sdist]
 # A leading slash anchors each pattern at the project root. Without it,

@@ -7,6 +7,9 @@ back, and this module owns those:
 * what the source that made the capture declares about its feed
   (``source``, ``feed_type``, ``trade_attribution``, ``sequence_kind``,
   ``clocks``), which ``audit`` holds the capture to;
+* the capture's resolution (``level``) and the source that reads its files
+  back (``replay_source``), which ``ob-analytics process`` and ``audit`` use
+  when ``--source`` is not given;
 * how many times the venue's sequence started again
   (``sequence_restarts``), which ``audit`` does not count as faults;
 * the instrument's price and size steps (``tick_size``, ``lot_size``), which
@@ -41,6 +44,8 @@ from ob_analytics.protocols import (
     Clocks,
     FeedDeclarations,
     FeedType,
+    Level,
+    OfflineSource,
     SequenceKind,
     TradeAttribution,
     clocks_of,
@@ -55,6 +60,7 @@ __all__ = [
     "read_instrument",
     "read_record",
     "record_path",
+    "replay_source_of",
     "run_declarations",
     "source_declarations",
     "write_record",
@@ -72,6 +78,13 @@ CLOCKS = "clocks"
 SEQUENCE_RESTARTS = "sequence_restarts"
 TICK_SIZE = "tick_size"
 LOT_SIZE = "lot_size"
+LEVEL = "level"
+REPLAY_SOURCE = "replay_source"
+
+#: The offline source that reads the files a capture writes at each level:
+#: ``orders.csv`` is in the Bitstamp format, ``depth.csv`` in the price-level
+#: CSV format.
+CAPTURE_READERS: dict[Level, str] = {Level.L3: "bitstamp", Level.L2: "depth_csv"}
 
 _E = TypeVar("_E", bound=Enum)
 
@@ -115,6 +128,12 @@ class CaptureRecord:
         The instrument's price step, in the quote currency.
     lot_size : float or None
         The instrument's size step, in the base asset.
+    level : Level or None
+        The capture's resolution (see :class:`~ob_analytics.protocols.Level`).
+    replay_source : str or None
+        The name of the offline source that reads the capture's files back,
+        as the source that made the capture declares it (see
+        :func:`replay_source_of`).
     """
 
     source: str | None = None
@@ -125,6 +144,20 @@ class CaptureRecord:
     sequence_restarts: int = 0
     tick_size: float | None = None
     lot_size: float | None = None
+    level: Level | None = None
+    replay_source: str | None = None
+
+    def reading_source(self) -> str | None:
+        """Return the name of the offline source that reads the capture.
+
+        The recorded ``replay_source``.  A capture written before captures
+        recorded it is read by the source that reads its ``level``
+        (``bitstamp`` for L3, ``depth_csv`` for L2).  ``None`` when the
+        capture records neither.
+        """
+        if self.replay_source is not None:
+            return self.replay_source
+        return None if self.level is None else CAPTURE_READERS[self.level]
 
     def instrument(self) -> dict[str, Any]:
         """Return the :class:`~ob_analytics.config.PipelineConfig` fields recorded.
@@ -182,6 +215,7 @@ def read_record(path: Any) -> CaptureRecord:
     fields = _readable_fields(path)
     where = record_path(path)
     source = fields.get(SOURCE)
+    replay_source = fields.get(REPLAY_SOURCE)
     return CaptureRecord(
         source=str(source) if source else None,
         feed_type=_enum(fields, FEED_TYPE, FeedType, where),
@@ -191,6 +225,10 @@ def read_record(path: Any) -> CaptureRecord:
         sequence_restarts=_count(fields, SEQUENCE_RESTARTS),
         tick_size=_step(fields, TICK_SIZE),
         lot_size=_step(fields, LOT_SIZE),
+        level=_enum(fields, LEVEL, Level, where),
+        replay_source=replay_source
+        if isinstance(replay_source, str) and replay_source
+        else None,
     )
 
 
@@ -361,10 +399,29 @@ def write_record(folder: Path, fields: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def replay_source_of(source: Any) -> str:
+    """Return the name of the offline source that reads *source*'s captures.
+
+    A live source declares it with a ``replay_source`` attribute.  One that
+    declares none is read by itself when it also replays files (Bitstamp),
+    and otherwise by the source that reads the files the capture writes at
+    its level: ``bitstamp`` for ``orders.csv`` (L3), ``depth_csv`` for
+    ``depth.csv`` (L2).
+    """
+    declared = getattr(source, "replay_source", None)
+    if declared:
+        return str(declared)
+    if isinstance(source, OfflineSource):
+        return source.name
+    return CAPTURE_READERS[Level(getattr(source, "level", Level.L3))]
+
+
 def source_declarations(source: Any) -> dict[str, Any]:
     """Return what a live *source* declares about its feed, as record fields.
 
-    ``source`` names the source; ``feed_type`` and ``trade_attribution`` are
+    ``source`` names the source, ``level`` is its resolution, and
+    ``replay_source`` the offline source that reads the capture back
+    (:func:`replay_source_of`).  ``feed_type`` and ``trade_attribution`` are
     what it declares (see :class:`~ob_analytics.protocols.FeedType` and
     :class:`~ob_analytics.protocols.TradeAttribution`).  ``sequence_kind`` is
     written only by a source that declares one.  ``clocks`` (see
@@ -378,6 +435,11 @@ def source_declarations(source: Any) -> dict[str, Any]:
     ``audit`` falls back to ``--source`` rather than to a guess.
     """
     declared: dict[str, Any] = {SOURCE: source.name}
+    try:
+        declared[LEVEL] = Level(getattr(source, "level", Level.L3)).value
+        declared[REPLAY_SOURCE] = replay_source_of(source)
+    except Exception as exc:  # noqa: BLE001 - never block finalize
+        logger.warning("Capturer '{}' level unreadable: {!r}", source.name, exc)
     try:
         declared[FEED_TYPE] = FeedType(
             getattr(source, "feed_type", FeedType.UNKNOWN)

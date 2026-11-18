@@ -1207,3 +1207,246 @@ class TestCaptureFlagsFromSettings:
         assert exc.value.code == 1
         err = capfd.readouterr().err
         assert "ClashingSettings.minutes would be the flag --minutes" in err
+
+
+# ---------------------------------------------------------------------------
+# process / audit: the reading source and its settings (#502)
+# ---------------------------------------------------------------------------
+
+#: The opening book and two changes of a ccxt capture, as the runner writes
+#: them: ``(side, price, volume, origin)``.
+_CCXT_BOOK = [
+    ("bid", 100.0, 1.5, "snapshot"),
+    ("ask", 101.0, 2.0, "snapshot"),
+    ("bid", 100.5, 0.5, "stream"),
+    ("ask", 101.0, 1.0, "stream"),
+]
+
+
+def _ccxt_capture(folder: Path, *, declarations: dict | None = None) -> Path:
+    """Write a small ccxt capture into *folder*, as the capture runner does.
+
+    The rows go through the capture's own file writer, and ``meta.json``
+    gets what a ccxt source declares.  *declarations* replaces those, to
+    stand for a capture written by an older version.
+    """
+    from ob_analytics.capture_files import FileCaptureSink
+    from ob_analytics.capture_record import source_declarations
+    from ob_analytics.live import CaptureResult
+    from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
+    from ob_analytics.protocols import Level
+
+    source = CcxtSource(settings=CcxtSettings(exchange="kraken"))
+    sink = FileCaptureSink(folder, keep_raw=False, level=Level.L2)
+    t0 = pd.Timestamp("2026-11-17 12:00", tz="UTC")
+    for i, (side, price, volume, origin) in enumerate(_CCXT_BOOK):
+        ts = t0 + pd.Timedelta(milliseconds=i)
+        sink.write_depth(
+            {"timestamp": ts, "exchange_timestamp": ts, "side": side,
+             "price": price, "volume": volume, "sequence": i + 1,
+             "origin": origin}
+        )  # fmt: skip
+    ts = t0 + pd.Timedelta(milliseconds=len(_CCXT_BOOK))
+    sink.write_trade(
+        {"trade_id": "t1", "timestamp": ts, "exchange_timestamp": ts,
+         "price": 101.0, "amount": 1.0, "buy_order_id": "", "sell_order_id": "",
+         "side": "buy"}
+    )  # fmt: skip
+    extras = source_declarations(source) if declarations is None else declarations
+    sink.finalize(
+        CaptureResult(
+            out_dir=folder,
+            n_order_events=0,
+            n_trade_events=1,
+            n_raw_frames=0,
+            started=t0,
+            ended=ts,
+            extras={**extras, "tick_size": 0.5, "lot_size": 0.5},
+            n_depth_events=len(_CCXT_BOOK),
+        )
+    )
+    return folder
+
+
+def _segmented_ccxt_capture(root: Path, *, old: bool = False) -> Path:
+    """Write a ccxt capture of one closed segment, with its ``manifest.json``.
+
+    An *old* capture records no reading source, as one written before
+    captures recorded it.
+    """
+    from ob_analytics.live._manifest import CaptureManifest, EndReason, Segment
+    from ob_analytics.live._supervisor import _declarations
+    from ob_analytics.live.ccxt_source import CcxtSettings, CcxtSource
+
+    declarations = _declarations(CcxtSource(settings=CcxtSettings(exchange="kraken")))
+    if old:
+        declarations.pop("replay_source")
+    seg_dir = _ccxt_capture(
+        root / "seg-0001",
+        declarations={"source": "ccxt", **declarations} if old else None,
+    )
+    started = pd.Timestamp("2026-11-17 12:00", tz="UTC")
+    CaptureManifest(
+        source="ccxt",
+        pair="BTC/USD",
+        level="L2",
+        started=started,
+        declarations=declarations,
+        segments=[
+            Segment(
+                name=seg_dir.name,
+                started=started,
+                ended=started + pd.Timedelta(seconds=1),
+                end_reason=EndReason.STOPPED,
+                n_book_events=len(_CCXT_BOOK),
+                n_trade_events=1,
+            )
+        ],
+    ).write(root)
+    return root
+
+
+class TestReadingSourceFromTheRecord:
+    """A capture names the source that reads it, so ``--source`` is not needed."""
+
+    def test_the_capture_record_names_the_reading_source(self, tmp_path):
+        from ob_analytics.capture_record import read_record
+        from ob_analytics.protocols import Level
+
+        record = read_record(_ccxt_capture(tmp_path / "cap"))
+        assert record.level is Level.L2
+        assert record.replay_source == "depth_csv"
+
+    def test_process_a_ccxt_capture_without_source(self, cli_runner, tmp_path):
+        cap = _ccxt_capture(tmp_path / "cap")
+        out = tmp_path / "out"
+        r = cli_runner("process", str(cap), "-o", str(out))
+        assert r.returncode == 0, r.stderr
+        assert "source=depth_csv" in r.stderr
+        assert (out / "depth.parquet").is_file()
+
+    def test_process_a_segmented_ccxt_capture_without_source(
+        self, cli_runner, tmp_path
+    ):
+        cap = _segmented_ccxt_capture(tmp_path / "cap")
+        out = tmp_path / "out"
+        r = cli_runner("process", str(cap), "-o", str(out))
+        assert r.returncode == 0, r.stderr
+        assert (out / "seg-0001" / "depth.parquet").is_file()
+
+    def test_audit_a_ccxt_capture_without_source(self, cli_runner, tmp_path):
+        r = cli_runner("audit", str(_ccxt_capture(tmp_path / "cap")))
+        assert r.returncode == 0, r.stderr
+        assert "source=depth_csv" in r.stderr
+
+    @pytest.mark.parametrize("command", ["process", "audit"])
+    def test_a_source_of_another_level_is_named_with_the_record(
+        self, cli_runner, tmp_path, command
+    ):
+        cap = _ccxt_capture(tmp_path / "cap")
+        r = cli_runner(command, str(cap), "--source", "bitstamp")
+        assert r.returncode == 2
+        assert "--source bitstamp reads L3 data" in r.stderr
+        assert "is L2" in r.stderr
+        assert "depth_csv" in r.stderr
+
+    def test_an_old_segmented_capture_is_read_by_its_level(self, cli_runner, tmp_path):
+        """A manifest with no reading source still records the level."""
+        cap = _segmented_ccxt_capture(tmp_path / "cap", old=True)
+        r = cli_runner("process", str(cap), "-o", str(tmp_path / "out"))
+        assert r.returncode == 0, r.stderr
+        assert "source=depth_csv" in r.stderr
+
+    def test_an_old_capture_that_records_nothing_keeps_the_default(
+        self, cli_runner, tmp_path
+    ):
+        """With no reading source and no level, bitstamp reads it, as before."""
+        cap = _ccxt_capture(tmp_path / "cap", declarations={"source": "ccxt"})
+        r = cli_runner("process", str(cap), "-o", str(tmp_path / "out"))
+        assert r.returncode != 0
+        assert "source=bitstamp" in r.stderr
+        r = cli_runner(
+            "process", str(cap), "--source", "depth_csv", "-o", str(tmp_path / "o2")
+        )
+        assert r.returncode == 0, r.stderr
+
+
+class TestReadingSourceSettings:
+    """``process`` and ``audit`` take a flag per field of the reading source's settings."""
+
+    @pytest.mark.parametrize("command", ["process", "audit"])
+    def test_the_settings_flags_are_in_the_help(self, cli_runner, command):
+        r = cli_runner(command, "x.dbn.zst", "--source", "databento", "--help")
+        assert r.returncode == 0, r.stderr
+        for flag in (
+            "--instrument-id INSTRUMENT_ID",
+            "--publisher-id PUBLISHER_ID",
+            "--raw-symbol RAW_SYMBOL",
+            "--trades-from {fills,prints}",
+            "--dataset DATASET",
+            "--symbol SYMBOL",
+            "--venue VENUE",
+        ):
+            assert flag in r.stdout
+
+    def test_a_capture_shows_the_settings_of_its_reading_source(
+        self, cli_runner, tmp_path
+    ):
+        r = cli_runner("process", str(_ccxt_capture(tmp_path / "cap")), "--help")
+        assert r.returncode == 0, r.stderr
+        assert "--price-divisor PRICE_DIVISOR" in r.stdout
+
+    def test_a_flag_of_another_source_is_refused(self, cli_runner, tmp_path):
+        cap = _ccxt_capture(tmp_path / "cap")
+        r = cli_runner("process", str(cap), "--instrument-id", "5")
+        assert r.returncode == 2
+        assert "unrecognized arguments: --instrument-id 5" in r.stderr
+
+    def test_settings_and_identity_reach_the_run(self, monkeypatch, tmp_path):
+        from ob_analytics import cli
+        from ob_analytics.pipeline import Pipeline
+
+        cap = _ccxt_capture(tmp_path / "cap")
+        seen: dict = {}
+
+        def run(self, path, *args, **kwargs):
+            seen["settings"] = self._source.settings
+            seen["ctx"] = self._ctx
+            raise SystemExit(0)
+
+        monkeypatch.setattr(Pipeline, "run", run)
+        with pytest.raises(SystemExit):
+            cli.main(
+                ["process", str(cap), "--price-divisor", "10",
+                 "--timestamp-unit", "us", "--symbol", "BTC/USD",
+                 "--venue", "kraken", "-o", str(tmp_path / "out")]
+            )  # fmt: skip
+        assert seen["settings"].price_divisor == 10
+        assert seen["settings"].timestamp_unit == "us"
+        assert (seen["ctx"].symbol, seen["ctx"].venue) == ("BTC/USD", "kraken")
+
+    def test_symbol_and_venue_tag_the_rows(self, cli_runner, tmp_path):
+        cap = _ccxt_capture(tmp_path / "cap")
+        out = tmp_path / "out"
+        r = cli_runner(
+            "process", str(cap), "--symbol", "BTC/USD", "--venue", "kraken",
+            "-o", str(out),
+        )  # fmt: skip
+        assert r.returncode == 0, r.stderr
+        depth = pd.read_parquet(out / "depth.parquet")
+        assert set(depth["symbol"]) == {"BTC/USD"}
+        assert set(depth["venue"]) == {"kraken"}
+
+    def test_a_bad_setting_is_refused(self, cli_runner, tmp_path):
+        cap = _ccxt_capture(tmp_path / "cap")
+        r = cli_runner("process", str(cap), "--price-divisor", "0")
+        assert r.returncode == 2
+        assert "Bad settings for source 'depth_csv'" in r.stderr
+
+    def test_settings_are_refused_on_a_saved_result(self, cli_runner, tmp_path):
+        r = cli_runner(
+            "audit", str(tmp_path), "--from-parquet", "--source", "depth_csv",
+            "--price-divisor", "10", "--symbol", "X",
+        )  # fmt: skip
+        assert r.returncode == 2
+        assert "--symbol, --price-divisor set how the pipeline runs" in r.stderr

@@ -34,7 +34,7 @@ account or an API key: the price-level book and the trades are public.
 pip install "ob-analytics[ccxt]"
 
 ob-analytics capture ccxt --venue coinbase --pair BTC/USD --minutes 10 -o /tmp/coinbase
-ob-analytics process /tmp/coinbase --source depth_csv --gallery --output /tmp/coinbase_out
+ob-analytics process /tmp/coinbase --gallery --output /tmp/coinbase_out
 ```
 
 ## Use the `coinbase` id

@@ -7,6 +7,7 @@ replay of that book at many instants (:func:`price_level_snapshots`).
 import numpy as np
 import pandas as pd
 import pytest
+from hypothesis import given, settings, strategies as st
 
 from ob_analytics.depth import (
     DepthSummaryEngine,
@@ -587,3 +588,84 @@ class TestPriceLevelSnapshots:
             price_level_snapshots(
                 _replay_depth(), [pd.Timestamp("2026-01-01 00:00:04")]
             )
+
+
+class TestNarrowWindow:
+    """Depth bins when the window holds fewer ticks than bins (#488)."""
+
+    def test_issue_snippet_has_no_negative_bin(self):
+        """The book from #488: best bid 49 ticks, best ask 51 ticks."""
+        ts = pd.date_range("2026-01-01", periods=20, freq="s", tz="UTC").as_unit("ns")
+        rows = [(ts[i], p, 100, "bid") for i, p in enumerate(range(40, 50))]
+        rows += [(ts[10 + i], p, 100, "ask") for i, p in enumerate(range(51, 61))]
+        depth = pd.DataFrame(
+            rows, columns=["timestamp", "price", "volume", "direction"]
+        )
+        depth["direction"] = pd.Categorical(
+            depth["direction"], categories=["bid", "ask"]
+        )
+        depth.attrs.update(tick_size=0.01, lot_size=1.0)
+
+        summary = summarize_depth(depth)
+        bins = summary.filter(regex=r"_vol\d+bps$")
+        assert bins.shape[1] == 40  # 20 bins a side, as at any price
+        assert (bins.to_numpy() >= 0).all()
+        last = bins.iloc[-1]
+        # Window of 25 bps x 20 bins around 49 and 51 ticks: bids 48..49
+        # (round(0.95 * 49) + 1 = 48), asks 51..54 (round(1.05 * 51) = 54).
+        assert last.filter(like="bid_").sum() == 200
+        assert last.filter(like="ask_").sum() == 400
+
+    @settings(max_examples=300, deadline=None)
+    @given(
+        best=st.integers(min_value=1, max_value=5000),
+        bps=st.sampled_from([1, 5, 25, 100, 500]),
+        bins=st.integers(min_value=1, max_value=40),
+        side=st.sampled_from([0, 1]),
+        levels=st.dictionaries(
+            st.integers(min_value=0, max_value=600),
+            st.integers(min_value=1, max_value=1000),
+            max_size=30,
+        ),
+        best_volume=st.integers(min_value=1, max_value=1000),
+    )
+    def test_bins_never_negative_and_sum_to_window(
+        self, best, bps, bins, side, levels, best_volume
+    ):
+        """No bin is negative, and a side's bins add up to its size in the window.
+
+        The window is worked out here from the price alone: asks from the best
+        ask to ``round((1 + r) * best)``, bids from the best bid down to
+        ``round((1 - r) * best) + 1`` and never less than the best bid, where
+        ``r`` is ``depth_bps * depth_bins`` basis points.
+        """
+        from ob_analytics.config import PipelineConfig
+
+        engine = DepthSummaryEngine(
+            PipelineConfig(depth_bps=bps, depth_bins=bins, price_decimals=2)
+        )
+        out = np.zeros(engine._row_len)
+        book = {best: best_volume}
+        for offset, volume in levels.items():
+            price = best + offset if side == 1 else best - offset
+            if price > 0 and offset > 0:
+                book[price] = volume
+        # Apply the best price last so every row is computed against it.
+        for price, volume in book.items():
+            if price != best:
+                engine.update_side(price, float(volume), side, out)
+        engine.update_side(best, float(best_volume), side, out)
+
+        r = bps * bins * 0.0001
+        if side == 1:
+            lo, hi = best, round((1 + r) * best)
+            start = 2 + bins
+        else:
+            lo, hi = min(round((1 - r) * best) + 1, best), best
+            start = 0
+        in_window = sum(v for p, v in book.items() if lo <= p <= hi)
+
+        assert out[start] == best
+        got = out[start + 2 : start + 2 + bins]
+        assert (got >= 0).all(), got
+        assert got.sum() == in_window

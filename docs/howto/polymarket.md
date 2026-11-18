@@ -37,7 +37,7 @@ Polymarket's public websocket.
 pip install "ob-analytics[ccxt]"
 
 ob-analytics capture ccxt --venue polymarket --pair <token id> --minutes 10 -o /tmp/poly
-ob-analytics process /tmp/poly --source depth_csv --gallery --output /tmp/poly_out
+ob-analytics process /tmp/poly --gallery --output /tmp/poly_out
 ```
 
 ## Find a token id
