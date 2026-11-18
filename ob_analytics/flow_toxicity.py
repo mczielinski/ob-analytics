@@ -21,11 +21,11 @@ prices and sizes.
 
 VPIN and Kyle's λ were designed for markets that trade thousands of times a
 minute.  On a thin tape they still return a number, so both results say when
-that number rests on too little data: :class:`KyleLambdaResult` carries
-``significant`` and ``diagnostics``, and the VPIN frame carries
-``attrs["diagnostics"]``.  The thresholds are the module constants
-:data:`KYLE_MIN_T_STAT` and :data:`KYLE_MIN_WINDOWS`; for VPIN the threshold is
-the ``n_buckets`` argument itself.
+that number rests on too little data: :class:`KyleLambdaResult` and
+:class:`VpinResult` each carry ``significant`` and ``diagnostics``.  The
+thresholds are the module constants :data:`KYLE_MIN_T_STAT` and
+:data:`KYLE_MIN_WINDOWS`; for VPIN the threshold is the ``n_buckets`` argument
+itself.
 """
 
 from __future__ import annotations
@@ -64,6 +64,7 @@ __all__ = [
     "OFI_WINDOWS",
     "VPIN_BUCKETS_PER_DAY",
     "KyleLambdaResult",
+    "VpinResult",
     "kyle_lambda",
     "ofi_by_window",
     "order_flow_imbalance",
@@ -104,9 +105,10 @@ class KyleLambdaResult:
         Fraction of ΔPrice variance explained by signed order flow.
     n_windows : int
         Number of time windows in the regression.
-    regression_df : pandas.DataFrame
-        Per-window ``timestamp``/``delta_price``/``signed_volume`` data, in
-        the quote currency and the instrument's units.
+    table : pandas.DataFrame
+        The regression data, one row per window: ``timestamp``,
+        ``delta_price`` and ``signed_volume``, in the quote currency and the
+        instrument's units.
     ci_low, ci_high : float
         Bounds of a block-bootstrap confidence interval for ``lambda_``.
         ``NaN`` when the bootstrap was turned off or the fit is undefined.
@@ -118,7 +120,7 @@ class KyleLambdaResult:
     t_stat: float
     r_squared: float
     n_windows: int
-    regression_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    table: pd.DataFrame = field(default_factory=pd.DataFrame)
     ci_low: float = float("nan")
     ci_high: float = float("nan")
     ci_level: float = 0.95
@@ -158,11 +160,60 @@ class KyleLambdaResult:
         return not self.diagnostics
 
 
+@dataclass(frozen=True)
+class VpinResult:
+    """Result of :func:`vpin`: the per-bucket table and how it was computed.
+
+    Attributes
+    ----------
+    table : pandas.DataFrame
+        One row per completed bucket.  :func:`vpin` lists the columns.
+    bucket_volume : float
+        The bucket size used, in the instrument's own units.
+    bucket_volume_rule : str
+        How the bucket size was chosen: ``"given"`` when it was passed in,
+        ``"adv/50"`` when :func:`vpin_bucket_volume` picked it, and
+        ``"total/100"`` (for ``n_buckets`` 50) when ``"fit"`` sized it from
+        the total volume.
+    n_buckets : int
+        The trailing window of ``vpin_avg``, in buckets.
+    """
+
+    table: pd.DataFrame
+    bucket_volume: float
+    bucket_volume_rule: str
+    n_buckets: int
+
+    @property
+    def diagnostics(self) -> tuple[str, ...]:
+        """Reasons the result should not be relied on; empty when there are none.
+
+        The one check is that there are at least :attr:`n_buckets` complete
+        buckets.  With fewer, ``vpin_avg`` never averages a full trailing
+        window.
+        """
+        n = len(self.table)
+        if n >= self.n_buckets:
+            return ()
+        plural = "" if n == 1 else "s"
+        too_few = (
+            f"only {n} complete bucket{plural}, fewer than "
+            f"n_buckets={self.n_buckets}; vpin_avg never averages a full window"
+        )
+        return (too_few,)
+
+    @property
+    def significant(self) -> bool:
+        """``True`` when :attr:`diagnostics` found nothing wrong."""
+        return not self.diagnostics
+
+
 # ── VPIN ─────────────────────────────────────────────────────────────
 
 
 def vpin_bucket_volume(
     trades: pd.DataFrame,
+    *,
     buckets_per_day: int = VPIN_BUCKETS_PER_DAY,
     trading_day: str | pd.Timedelta = "24h",
 ) -> float:
@@ -254,11 +305,12 @@ def _empty_vpin_frame(
 
 def vpin(
     trades: pd.DataFrame,
+    *,
     bucket_volume: float | Literal["fit"] | None = None,
     n_buckets: int = 50,
     sign_method: str | None = None,
     quotes: pd.DataFrame | None = None,
-) -> pd.DataFrame:
+) -> VpinResult:
     """Compute the Volume-Synchronized Probability of Informed Trading.
 
     Partitions cumulative trade volume into equal-sized *buckets* and
@@ -293,7 +345,7 @@ def vpin(
     n_buckets : int, optional
         Window length (in buckets) for the trailing VPIN average.
         Default is 50, following the original paper.  Fewer complete buckets
-        than this is reported in ``attrs["diagnostics"]``.
+        than this is reported in the result's ``diagnostics``.
     sign_method : str, optional
         How to obtain the buy/sell split when there is no native
         ``direction``.  ``None`` (default) uses an existing ``direction`` if
@@ -312,9 +364,15 @@ def vpin(
 
     Returns
     -------
-    pandas.DataFrame
-        One row per completed bucket (zero rows, same columns and dtypes,
-        when the trades fill no bucket) with columns:
+    VpinResult
+        The per-bucket ``table``, the settings it was computed with
+        (``bucket_volume``, ``bucket_volume_rule``, ``n_buckets``), and
+        ``significant`` / ``diagnostics``, which say when the result rests on
+        too few buckets to rely on.  Fewer than *n_buckets* complete buckets
+        also raises a :class:`UserWarning`.
+
+        ``table`` has one row per completed bucket (zero rows, same columns
+        and dtypes, when the trades fill no bucket) with columns:
 
         * ``bucket`` — zero-based bucket index
         * ``timestamp_start`` — first trade timestamp in the bucket
@@ -331,23 +389,6 @@ def vpin(
           taker; a trade with no taker id counts as one taker of its own
         * ``vpin`` — ``|buy_volume - sell_volume| / bucket_volume``
         * ``vpin_avg`` — trailing mean of ``vpin`` over *n_buckets*
-
-        The frame's ``attrs`` record how it was computed, so the settings can
-        be reported next to the number:
-
-        * ``attrs["bucket_volume"]`` — the bucket size used, in the
-          instrument's own units
-        * ``attrs["bucket_volume_rule"]`` — ``"given"`` when passed in,
-          ``"adv/50"`` when picked by :func:`vpin_bucket_volume`, and
-          ``"total/100"`` (for *n_buckets* 50) when ``"fit"`` sized it from
-          the total volume
-        * ``attrs["n_buckets"]`` — the trailing window, in buckets
-        * ``attrs["diagnostics"]`` — a tuple of reasons the result should not
-          be relied on; empty when there are none.  Today the one check is
-          whether there are at least *n_buckets* complete buckets, since
-          ``vpin_avg`` is not a full trailing average before that.  The same
-          condition also raises a :class:`UserWarning`, since ``diagnostics``
-          is easy to miss on a frame that otherwise looks fine.
 
     Raises
     ------
@@ -395,14 +436,14 @@ def vpin(
             trades, bucket_volume, n_buckets, sign_method, quotes, advice
         )
 
-    diagnostics: tuple[str, ...] = ()
-    if len(result) < n_buckets:
-        plural = "" if len(result) == 1 else "s"
-        too_few = (
-            f"only {len(result)} complete bucket{plural}, fewer than "
-            f"n_buckets={n_buckets}; vpin_avg never averages a full window"
-        )
-        diagnostics = (too_few,)
+    out = VpinResult(
+        table=result,
+        bucket_volume=float(bucket_volume),
+        bucket_volume_rule=rule,
+        n_buckets=n_buckets,
+    )
+    if out.diagnostics:
+        reasons = "; ".join(out.diagnostics)
         # Both a given and a defaulted bucket_volume are named here — the
         # default rule sizes buckets from a fixed 50-per-day constant, not
         # from n_buckets, so a caller who raises n_buckets above 50 can see
@@ -410,12 +451,8 @@ def vpin(
         # (e.g. "too large for a capture under a day") would be wrong there.
         see_rule = " (see vpin_bucket_volume)" if rule != "given" else ""
         advice = f"Pass a smaller bucket_volume{see_rule} or a smaller n_buckets."
-        warnings.warn(f"vpin: {too_few}. {advice}", stacklevel=2)
-    result.attrs["bucket_volume"] = float(bucket_volume)
-    result.attrs["bucket_volume_rule"] = rule
-    result.attrs["n_buckets"] = n_buckets
-    result.attrs["diagnostics"] = diagnostics
-    return result
+        warnings.warn(f"vpin: {reasons}. {advice}", stacklevel=2)
+    return out
 
 
 def _vpin_from_signs(
@@ -501,8 +538,8 @@ def _vpin_from_bvc(
 
 def kyle_lambda(
     trades: pd.DataFrame,
-    window: str = "5min",
     *,
+    window: str = "5min",
     sign_method: str | None = None,
     quotes: pd.DataFrame | None = None,
     n_boot: int = 1000,
@@ -523,7 +560,7 @@ def kyle_lambda(
     λ is in the quote currency per unit of size (for example USD per BTC),
     whether the trades hold integer ticks and lots (with ``tick_size`` and
     ``lot_size`` on the frame's ``attrs``, as on a pipeline result) or
-    display prices and sizes.  ``regression_df`` is in the same units.
+    display prices and sizes.  ``table`` is in the same units.
 
     Works on feeds without a native aggressor side.  When the trades frame
     has no ``direction``, the side is inferred with a trade-sign classifier
@@ -569,7 +606,7 @@ def kyle_lambda(
     -------
     KyleLambdaResult
         Frozen dataclass with ``lambda_``, ``t_stat``, ``r_squared``,
-        ``n_windows``, ``regression_df``, the interval ``ci_low`` /
+        ``n_windows``, the regression ``table``, the interval ``ci_low`` /
         ``ci_high``, and ``significant`` / ``diagnostics``, which say when λ
         rests on too little data to rely on.
 
@@ -610,7 +647,7 @@ def kyle_lambda(
             t_stat=float("nan"),
             r_squared=float("nan"),
             n_windows=n,
-            regression_df=reg_df,
+            table=reg_df,
             ci_level=ci_level,
         )
 
@@ -652,7 +689,7 @@ def kyle_lambda(
         t_stat=t_stat,
         r_squared=r_squared,
         n_windows=n,
-        regression_df=reg_df,
+        table=reg_df,
         ci_low=ci_low,
         ci_high=ci_high,
         ci_level=ci_level,
@@ -707,6 +744,7 @@ def _block_bootstrap_slope_ci(
 
 def order_flow_imbalance(
     trades: pd.DataFrame,
+    *,
     window: str = "1min",
     sign_method: str | None = None,
     quotes: pd.DataFrame | None = None,
@@ -818,6 +856,7 @@ OFI_WINDOWS: tuple[str, ...] = ("5s", "15s", "60s", "300s")
 
 def ofi_by_window(
     trades: pd.DataFrame,
+    *,
     windows: tuple[str, ...] = OFI_WINDOWS,
     grid: str = "5s",
     sign_method: str | None = None,

@@ -9,8 +9,8 @@ the result back up as DataFrames.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
-from typing import TypedDict
 
 import pandas as pd
 
@@ -82,11 +82,9 @@ def order_lifecycles(events: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-class BookSnapshot(TypedDict):
+@dataclass(frozen=True)
+class BookSnapshot:
     """The order book at one instant, as :func:`order_book` returns it.
-
-    A plain dictionary at run time; the type names its three fixed keys so
-    that callers indexing it get a DataFrame rather than a wide union.
 
     Attributes
     ----------
@@ -105,6 +103,7 @@ class BookSnapshot(TypedDict):
 
 def order_book(
     events: pd.DataFrame,
+    *,
     at: datetime | None = None,
     max_levels: int | None = None,
     bps_range: int = 0,
@@ -144,10 +143,9 @@ def order_book(
     Returns
     -------
     BookSnapshot
-        A dictionary containing:
-        - 'timestamp': The evaluation timestamp.
-        - 'asks': DataFrame of active ask orders.
-        - 'bids': DataFrame of active bid orders.
+        The book at *at*: ``timestamp`` (the evaluation instant), ``bids``
+        (active bid orders, best first) and ``asks`` (active ask orders, best
+        last).
 
         Each order's ``price`` is the price it rests at: the price of its
         latest ``created`` row, or of a later ``changed`` row with no fill.  A row that
@@ -201,4 +199,4 @@ def order_book(
         asks = asks.tail(max_levels).reset_index(drop=True)
         bids = bids.head(max_levels).reset_index(drop=True)
 
-    return {"timestamp": at, "asks": asks, "bids": bids}
+    return BookSnapshot(timestamp=at, bids=bids, asks=asks)

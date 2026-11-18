@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.book import BookSnapshot
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
@@ -155,15 +156,15 @@ class TestSharedDrawingData:
         assert padded_range(None) is None
 
     def test_the_book_payload_carries_its_mid_and_curves(self):
-        book = {
-            "timestamp": 0,
-            "bids": pd.DataFrame(
+        book = BookSnapshot(
+            timestamp=pd.Timestamp(0),
+            bids=pd.DataFrame(
                 {"id": [1, 2], "price": [99.0, 98.0], "volume": [1.0, 2.0]}
             ),
-            "asks": pd.DataFrame(
+            asks=pd.DataFrame(
                 {"id": [3, 4], "price": [102.0, 101.0], "volume": [1.0, 1.0]}
             ),
-        }
+        )
         data = prepare.book_snapshot(book, level="L2")
         assert data["mid"] == pytest.approx(100.0)
         assert list(data["bid_curve"]["price"]) == [98.0, 99.0]

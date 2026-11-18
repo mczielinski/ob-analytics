@@ -23,6 +23,8 @@ quantifying price impact.
 
 ::: ob_analytics.flow_toxicity.KyleLambdaResult
 
+::: ob_analytics.flow_toxicity.VpinResult
+
 ## Thresholds
 
 ::: ob_analytics.flow_toxicity.KYLE_MIN_T_STAT

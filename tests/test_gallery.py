@@ -1183,7 +1183,7 @@ class TestCardBuilders:
         card = kyle_lambda_card(fit)
         assert card.title == f"Kyle's Lambda (lambda={fit.lambda_:.4f})"
         # A point for each window in the regression.
-        assert drawn(_draw(card))["pathcollection"] == len(fit.regression_df)
+        assert drawn(_draw(card))["pathcollection"] == len(fit.table)
 
     def test_trading_halts_card_shades_each_halt(self, result) -> None:
         trades = display_result(result).trades

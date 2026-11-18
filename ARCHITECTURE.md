@@ -146,8 +146,8 @@ wrong number.
   (`price_from`, `price_to`) and set `col_bias` to a value in `(0, 1)`, or to
   `0` or less for a log scale, to see them.
 - **The feature table does not carry the metric diagnostics.**
-  `vpin` records its bucket settings and diagnostics in the result's
-  `attrs`, and `kyle_lambda` returns `significant` and `diagnostics`.
+  `vpin` and `kyle_lambda` each return a result with `significant` and
+  `diagnostics` beside the table.
   The `vpin` and `kyle_lambda` columns of `features()` do not carry these
   checks. To check a thin tape, call the two functions directly.
 - **Colour scales do not follow the theme.** `PlotTheme` and its `Palette`
@@ -375,7 +375,7 @@ ob_analytics/
 ├── hidden_liquidity.py   # detect_icebergs, hidden_trades
 ├── data.py               # save_data, load_data, load_result, writer registry
 ├── interop.py            # export to hftbacktest and Nautilus Trader
-├── flow_toxicity.py      # vpin, kyle_lambda, order_flow_imbalance, KyleLambdaResult
+├── flow_toxicity.py      # vpin, kyle_lambda, order_flow_imbalance, VpinResult, KyleLambdaResult
 ├── metrics.py            # METRICS registry: register_metric and the built-in metrics
 ├── bars.py               # bars, BAR_RULES registry, register_bar_rule
 ├── cost.py               # transaction_costs, cost_summary, amihud, roll_spread, CostSummary

@@ -14,6 +14,7 @@ import pytest
 
 bpl = pytest.importorskip("bokeh.plotting", reason="bokeh not installed")
 
+from ob_analytics.book import BookSnapshot
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.visualization import prepare
 from ob_analytics.visualization._bokeh import (
@@ -149,13 +150,13 @@ class TestBokehTradeTapeL3:
 
 
 class TestBokehBookSnapshot:
-    def test_aggregate_returns_figure(self, plot_order_book: dict) -> None:
+    def test_aggregate_returns_figure(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L2")
         fig = bokeh_book_snapshot_aggregate(data)
         assert isinstance(fig, bpl.figure)
         assert len(fig.renderers) >= 2  # bid + ask bars
 
-    def test_per_order_returns_figure(self, plot_order_book: dict) -> None:
+    def test_per_order_returns_figure(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L3")
         fig = bokeh_book_snapshot_per_order(data)
         assert isinstance(fig, bpl.figure)
@@ -169,7 +170,7 @@ class TestBokehBookSnapshot:
         ],
     )
     def test_payload_level_mismatch_raises(
-        self, plot_order_book: dict, renderer, wrong_per_order: bool
+        self, plot_order_book: BookSnapshot, renderer, wrong_per_order: bool
     ) -> None:
         data = prepare.book_snapshot(
             plot_order_book, level="L3" if wrong_per_order else "L2"
@@ -179,13 +180,13 @@ class TestBokehBookSnapshot:
 
 
 class TestBokehDepthChart:
-    def test_aggregate_returns_figure(self, plot_order_book: dict) -> None:
+    def test_aggregate_returns_figure(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L2")
         fig = bokeh_depth_chart_aggregate(data)
         assert isinstance(fig, bpl.figure)
         assert len(fig.renderers) >= 2  # bid + ask curves (step + varea each)
 
-    def test_per_order_returns_figure(self, plot_order_book: dict) -> None:
+    def test_per_order_returns_figure(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L3")
         fig = bokeh_depth_chart_per_order(data)
         # Two levels a side: each side's step and fill, and a marker per level.
@@ -199,7 +200,7 @@ class TestBokehDepthChart:
         ],
     )
     def test_payload_level_mismatch_raises(
-        self, plot_order_book: dict, renderer, wrong_per_order: bool
+        self, plot_order_book: BookSnapshot, renderer, wrong_per_order: bool
     ) -> None:
         data = prepare.book_snapshot(
             plot_order_book, level="L3" if wrong_per_order else "L2"
@@ -228,7 +229,7 @@ class TestBackendDispatch:
         assert drawn(fig)["scatter"] == len(plot_trades)
 
     def test_missing_level_for_comparable_concept_raises(
-        self, plot_order_book: dict
+        self, plot_order_book: BookSnapshot
     ) -> None:
         from ob_analytics.visualization import plot, prepare
 
@@ -236,7 +237,7 @@ class TestBackendDispatch:
         with pytest.raises(ConfigError, match='pass level="L2" or level="L3"'):
             plot("book_snapshot", backend="bokeh", **data)
 
-    def test_ax_is_refused(self, plot_order_book: dict) -> None:
+    def test_ax_is_refused(self, plot_order_book: BookSnapshot) -> None:
         import matplotlib.pyplot as plt
 
         from ob_analytics.visualization import plot, prepare

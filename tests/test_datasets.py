@@ -205,7 +205,7 @@ class TestBookAndDepth:
     def test_scripted_book_at_t30(self, classified: pd.DataFrame) -> None:
         tp = classified["timestamp"].iloc[0] + pd.Timedelta(seconds=30)
         snap = order_book(classified, at=tp)
-        bids, asks = snap["bids"], snap["asks"]
+        bids, asks = snap.bids, snap.asks
         assert bids["price"].max() == 99.0  # best bid
         assert asks["price"].min() == 101.0  # best ask — spread 2, mid 100
         assert bids.groupby("price")["volume"].sum().to_dict() == {98.0: 4.0, 99.0: 4.0}
@@ -224,9 +224,9 @@ class TestBookAndDepth:
         two_sided = 0
         for s in range(1, 61, 7):
             snap = order_book(classified, at=t0 + pd.Timedelta(seconds=s))
-            if len(snap["bids"]) and len(snap["asks"]):
+            if len(snap.bids) and len(snap.asks):
                 two_sided += 1
-                assert snap["bids"]["price"].max() < snap["asks"]["price"].min()
+                assert snap.bids["price"].max() < snap.asks["price"].min()
         assert two_sided  # the check means nothing on one-sided books
 
     def test_depth_pipeline_runs(self, classified: pd.DataFrame) -> None:

@@ -176,8 +176,8 @@ fig = plot("order_flow_imbalance", **prepare.order_flow_imbalance(ofi, trades=ta
 # %%
 from ob_analytics.flow_toxicity import vpin
 
-vpin_df = vpin(tape, bucket_volume=8.0, n_buckets=3)
-vpin_df[["bucket", "buy_volume", "sell_volume", "vpin", "vpin_avg"]].round(3)
+fit = vpin(tape, bucket_volume=8.0, n_buckets=3)
+fit.table[["bucket", "buy_volume", "sell_volume", "vpin", "vpin_avg"]].round(3)
 
 # %% [markdown]
 # Bucket 0 gathers the calm open — 4 buys, 4 sells, imbalance
@@ -188,7 +188,7 @@ vpin_df[["bucket", "buy_volume", "sell_volume", "vpin", "vpin_avg"]].round(3)
 # line above which flow is "toxic":
 
 # %%
-fig = plot("vpin", **prepare.vpin(vpin_df, threshold=0.7))
+fig = plot("vpin", **prepare.vpin(fit, threshold=0.7))
 
 # %% [markdown]
 # ## Kyle's λ: the price of a unit of flow
@@ -213,7 +213,7 @@ from ob_analytics.flow_toxicity import kyle_lambda
 
 kyle = kyle_lambda(tape, window="30s")
 print(f"λ = {kyle.lambda_:.4f}   t = {kyle.t_stat:.2f}   R² = {kyle.r_squared:.3f}")
-kyle.regression_df.round({"delta_price": 2, "signed_volume": 2})
+kyle.table.round({"delta_price": 2, "signed_volume": 2})
 
 # %% [markdown]
 # The regression table is the anchor: the two calm-open windows carry
@@ -296,10 +296,10 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
     vpin_real = vpin(result.trades)
 print(
-    f"bucket_volume = {vpin_real.attrs['bucket_volume']:.2f} "
-    f"({vpin_real.attrs['bucket_volume_rule']})   buckets = {len(vpin_real)}"
+    f"bucket_volume = {vpin_real.bucket_volume:.2f} "
+    f"({vpin_real.bucket_volume_rule})   buckets = {len(vpin_real.table)}"
 )
-for reason in vpin_real.attrs["diagnostics"]:
+for reason in vpin_real.diagnostics:
     print(" -", reason)
 
 # %% [markdown]
@@ -315,14 +315,14 @@ for reason in vpin_real.attrs["diagnostics"]:
 #     minute. On a thin tape, three problems arise. **(1) Significance:** as
 #     above, λ's t-statistic collapses; VPIN's trailing average is taken
 #     over too few buckets to mean much. Read `significant` and
-#     `diagnostics` on the λ result, and `attrs["diagnostics"]` on the
-#     VPIN frame, before the number. **(2) The knobs move the
+#     `diagnostics` on the λ result and on the VPIN result before the
+#     number. **(2) The knobs move the
 #     answer:** `bucket_volume` for VPIN and `window` for Kyle and OFI
 #     are not neutral defaults — halve the bucket size and VPIN's whole
 #     profile shifts. Choose them from the instrument's typical volume
 #     (`vpin_bucket_volume` applies the average daily volume ÷ 50 rule),
-#     and report them alongside the number; the VPIN frame keeps its
-#     bucket size in `attrs["bucket_volume"]` for this. **(3) Trade side is itself an
+#     and report them alongside the number; the VPIN result keeps its
+#     bucket size in `bucket_volume` for this. **(3) Trade side is itself an
 #     inference:** every metric here needs each trade labelled buy or
 #     sell, which ob-analytics knows exactly (the taker's `direction`
 #     from chapter 4) — but on venues that ship only anonymous prints
@@ -389,7 +389,7 @@ for size in (4.0, 8.0, 16.0):
     # 16-unit buckets fill fewer than n_buckets, and vpin warns.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        v = vpin(tape, bucket_volume=size, n_buckets=3)
+        v = vpin(tape, bucket_volume=size, n_buckets=3).table
     rows[f"bucket_volume={size:g}"] = {
         "buckets": len(v),
         "one-sided buckets": int((v["vpin"] == 1).sum()),

@@ -128,9 +128,15 @@ though the run stores sizes as whole lots:
 from ob_analytics import Pipeline, vpin, kyle_lambda, sample_csv_path
 
 result = Pipeline().run(sample_csv_path())
-vpin_df = vpin(result.trades, bucket_volume=0.25)  # 0.25 BTC buckets
+fit = vpin(result.trades, bucket_volume=0.25)  # 0.25 BTC buckets
+fit.table        # one row per bucket
 kyle = kyle_lambda(result.trades)
+kyle.table       # one row per regression window
 ```
+
+Each returns a small result object: the table, plus what does not fit in it,
+such as `fit.bucket_volume` and `kyle.lambda_`. Both have `significant` and
+`diagnostics`, which say when the number rests on too little data.
 
 The same metrics are registered by name, so `result.metric("vpin",
 bucket_volume=0.25)` and `result.plot("vpin", bucket_volume=0.25)` give the

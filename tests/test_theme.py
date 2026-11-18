@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.book import BookSnapshot
 from ob_analytics.exceptions import UnknownNameError
 from ob_analytics.visualization import (
     DEFAULT_PALETTE,
@@ -52,11 +53,17 @@ def trades_data() -> dict:
 
 @pytest.fixture
 def book_data() -> dict:
-    book = {
-        "timestamp": 1430445600,
-        "bids": np.array([[236.50, 100, 100], [236.00, 200, 300]]),
-        "asks": np.array([[237.00, 150, 150], [237.50, 250, 400]]),
-    }
+    book = BookSnapshot(
+        timestamp=pd.Timestamp(1430445600, unit="s"),
+        bids=pd.DataFrame(
+            [[236.50, 100, 100], [236.00, 200, 300]],
+            columns=["price", "volume", "liquidity"],
+        ),
+        asks=pd.DataFrame(
+            [[237.00, 150, 150], [237.50, 250, 400]],
+            columns=["price", "volume", "liquidity"],
+        ),
+    )
     return prepare.book_snapshot(book, level="L2")
 
 

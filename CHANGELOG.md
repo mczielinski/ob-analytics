@@ -356,6 +356,48 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     private name there. The top level now also exports `iceberg_slices`, `list_writers`,
     `register_writer` and `load_writer_plugins`, beside the other
     registries.
+- **Measures with side results return one shape, and take their settings by
+  keyword** (#510). A measure returns a table when the table says
+  everything. When it has more to report, it returns a frozen dataclass that
+  holds the table as a field, as `kyle_lambda` already did. So VPIN's
+  diagnostics no longer live only in a frame's `attrs`, which merge, concat
+  and groupby drop.
+  - `vpin(...)` returned a DataFrame with `attrs["bucket_volume"]`,
+    `attrs["bucket_volume_rule"]`, `attrs["n_buckets"]` and
+    `attrs["diagnostics"]` -> it returns the new `VpinResult`. The frame is
+    `fit.table`, and the rest is `fit.bucket_volume`,
+    `fit.bucket_volume_rule`, `fit.n_buckets` and `fit.diagnostics`, with
+    `fit.significant` as on `KyleLambdaResult`. The table itself has no
+    `attrs`. The `vpin` metric's table keeps all four in its `attrs`, as the
+    `kyle_lambda` metric keeps the fit.
+  - `prepare.vpin(vpin_df)` -> `prepare.vpin(fit)`, the `VpinResult`. The
+    keyword `vpin_df=` -> `vpin_result=`.
+  - `KyleLambdaResult.regression_df` -> `KyleLambdaResult.table`, the name
+    `VpinResult` uses.
+  - `order_book(...)` returned a dictionary -> it returns `BookSnapshot`, now
+    a frozen dataclass: `book["bids"]` -> `book.bids`, and the same for
+    `asks` and `timestamp`. `price_level_snapshots` returns the same type.
+    `prepare.book_snapshot` and `prepare.depth_chart` take a `BookSnapshot`,
+    not a dictionary.
+  - `ages, times, max_rank = queue_age_grid(events)` ->
+    `grid = queue_age_grid(events)`, a DataFrame with one row per queue rank
+    (index `rank`, from 1) and one column per sample time: `ages` ->
+    `grid.to_numpy()`, `times` -> `grid.columns`, `max_rank` -> `len(grid)`.
+  - Every setting after the input table is keyword-only:
+    - `vpin(trades, bucket_volume, n_buckets, sign_method, quotes)` ->
+      `vpin(trades, *, bucket_volume, n_buckets, sign_method, quotes)`.
+    - `vpin_bucket_volume(trades, buckets_per_day, trading_day)` ->
+      `vpin_bucket_volume(trades, *, buckets_per_day, trading_day)`.
+    - `kyle_lambda(trades, window, *, sign_method, ...)` ->
+      `kyle_lambda(trades, *, window, sign_method, ...)`.
+    - `order_flow_imbalance(trades, window, sign_method, quotes)` ->
+      `order_flow_imbalance(trades, *, window, sign_method, quotes)`.
+    - `ofi_by_window(trades, windows, grid, sign_method, quotes)` ->
+      `ofi_by_window(trades, *, windows, grid, sign_method, quotes)`.
+    - `order_book(events, at, max_levels, bps_range, uncross)` ->
+      `order_book(events, *, at, max_levels, bps_range, uncross)`.
+    - `price_level_snapshots(depth, times, max_levels)` ->
+      `price_level_snapshots(depth, times, *, max_levels)`.
 - **Plots draw sizes in the instrument's units** (#487). Every plot
   multiplied sizes by a power of ten that no axis or colour bar showed, so a
   2 BTC level was drawn at 200. Sizes now read off an axis as they are in

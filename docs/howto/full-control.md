@@ -46,9 +46,9 @@ from ob_analytics.book import order_book
 # Snapshot ten minutes into the run (events.timestamp is tz-aware UTC).
 tp = events["timestamp"].iloc[0] + pd.Timedelta(minutes=10)
 snapshot = order_book(events, at=tp, max_levels=5)
-print(snapshot["timestamp"])
-print(snapshot["bids"].head())
-print(snapshot["asks"].head())
+print(snapshot.timestamp)
+print(snapshot.bids.head())
+print(snapshot.asks.head())
 ```
 
 Use `bps_range` to filter to a basis-point band around the mid-price,

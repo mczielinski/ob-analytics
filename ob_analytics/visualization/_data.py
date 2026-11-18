@@ -11,7 +11,7 @@ import math
 import re
 import warnings
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
 
@@ -20,6 +20,7 @@ import pandas as pd
 from loguru import logger
 
 from ob_analytics._utils import _UNSET, require_per_order_events, window_start
+from ob_analytics.book import BookSnapshot
 from ob_analytics.depth import (
     _mid_price,
     _readable_mid,
@@ -31,7 +32,12 @@ from ob_analytics.depth import (
     readable_quotes,
 )
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.flow_toxicity import OFI_WINDOWS, ofi_by_window
+from ob_analytics.flow_toxicity import (
+    OFI_WINDOWS,
+    KyleLambdaResult,
+    VpinResult,
+    ofi_by_window,
+)
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import validate_columns
 
@@ -1473,10 +1479,15 @@ def prepare_liquidity_at_touch_l3_data(
         (events["timestamp"] >= start_time) & (events["timestamp"] <= end_time)
     ]
     if win.empty:
-        ages, times, max_rank = _empty_age_grid()
+        grid = _empty_age_grid()
     else:
-        ages, times, max_rank = queue_age_grid(win, side=side, n_time=n_time)
-    return {"ages": ages, "times": times, "max_rank": max_rank, "side": side}
+        grid = queue_age_grid(win, side=side, n_time=n_time)
+    return {
+        "ages": grid.to_numpy(dtype=float),
+        "times": grid.columns.to_numpy(),
+        "max_rank": len(grid),
+        "side": side,
+    }
 
 
 def prepare_price_view_data(
@@ -2043,17 +2054,13 @@ def prepare_cancellations_l3_data(
     return {"bids": bids, "asks": asks}
 
 
-def _as_book_side_frame(side: pd.DataFrame | np.ndarray) -> pd.DataFrame:
-    """Coerce one order-book side to a DataFrame with at least price + volume.
+def _as_book_side_frame(side: pd.DataFrame) -> pd.DataFrame:
+    """Copy one order-book side, which has at least ``price`` and ``volume``.
 
     :func:`ob_analytics.book.order_book` hands back per-order frames
     carrying ``id`` and ``bps``, and
     :func:`ob_analytics.depth.price_level_snapshots` one row per price level.
-    The synthetic/legacy path hands back a 3-column ``[price, volume,
-    liquidity]`` ndarray.  All three normalise here.
     """
-    if isinstance(side, np.ndarray):
-        return pd.DataFrame(side, columns=["price", "volume", "liquidity"])
     return side.copy()
 
 
@@ -2187,7 +2194,7 @@ def check_book_payload_level(data: dict[str, Any], *, per_order: bool) -> None:
 
 
 def prepare_book_snapshot_data(
-    order_book: Mapping[str, Any],
+    order_book: BookSnapshot,
     show_quantiles: bool = False,
     top_n: int | None = 40,
     *,
@@ -2225,14 +2232,14 @@ def prepare_book_snapshot_data(
 
 
 def _book_snapshot(
-    order_book: Mapping[str, Any],
+    order_book: BookSnapshot,
     per_order: bool,
     show_quantiles: bool,
     top_n: int | None,
 ) -> dict[str, Any]:
     """The book snapshot payload, at a level already checked."""
-    bids = _as_book_side_frame(order_book["bids"])
-    asks = _as_book_side_frame(order_book["asks"])
+    bids = _as_book_side_frame(order_book.bids)
+    asks = _as_book_side_frame(order_book.asks)
 
     bid_side = _window_levels(
         _book_side(bids, ascending=False, per_order=per_order), top_n
@@ -2247,7 +2254,7 @@ def _book_snapshot(
         bid_quantiles = _high_volume_prices(bid_side)
         ask_quantiles = _high_volume_prices(ask_side)
 
-    timestamp = pd.to_datetime(order_book["timestamp"], unit="s", utc=True)
+    timestamp = pd.to_datetime(order_book.timestamp, unit="s", utc=True)
 
     return {
         "bids": bid_side,
@@ -2264,7 +2271,7 @@ def _book_snapshot(
 
 
 def prepare_depth_chart_data(
-    order_book: Mapping[str, Any],
+    order_book: BookSnapshot,
     *,
     level: Level | str | None = _UNSET,
     **options: Any,
@@ -2279,7 +2286,7 @@ def prepare_depth_chart_data(
 
 
 def _replay_price_range(
-    books: list[Any], price_levels: int
+    books: list[BookSnapshot], price_levels: int
 ) -> tuple[float, float] | None:
     """One price range for every frame of a replay, or ``None`` if none has two sides.
 
@@ -2297,7 +2304,7 @@ def _replay_price_range(
     path: list[float] = []
     reach: list[float] = []
     for book in books:
-        bids, asks = book["bids"], book["asks"]
+        bids, asks = book.bids, book.asks
         if bids.empty or asks.empty:
             continue
         bid_prices = np.unique(bids["price"].to_numpy())[::-1]
@@ -2477,11 +2484,11 @@ def prepare_book_replay_data(
     if price_range is not None:
         low, high = price_range
         books = [
-            {
-                **book,
-                "bids": book["bids"][book["bids"]["price"].between(low, high)],
-                "asks": book["asks"][book["asks"]["price"].between(low, high)],
-            }
+            replace(
+                book,
+                bids=book.bids[book.bids["price"].between(low, high)],
+                asks=book.asks[book.asks["price"].between(low, high)],
+            )
             for book in books
         ]
 
@@ -2726,7 +2733,7 @@ def _trade_count(table: pd.DataFrame) -> tuple[str, str, str] | None:
 
 
 def prepare_vpin_data(
-    vpin_df: pd.DataFrame,
+    vpin_result: VpinResult,
     threshold: float = 0.7,
     *,
     min_trades: int = MIN_TRADES,
@@ -2734,6 +2741,7 @@ def prepare_vpin_data(
 ) -> dict[str, Any]:
     """Prepare data for a VPIN time-series chart.
 
+    *vpin_result* is what :func:`~ob_analytics.flow_toxicity.vpin` returns.
     The payload's ``note`` says how the buckets were sized when
     ``bucket_volume="fit"`` sized them from the total volume, and is empty
     otherwise.  The gallery shows it under the card.
@@ -2746,6 +2754,7 @@ def prepare_vpin_data(
     and the message says so.
     """
     resolve_level("vpin", level)
+    vpin_df = vpin_result.table
     too_few = ""
     count = _trade_count(vpin_df)
     if not vpin_df.empty and count is not None:
@@ -2768,19 +2777,19 @@ def prepare_vpin_data(
         "vpin_df": vpin_df,
         "threshold": threshold,
         "bar_width": bar_width,
-        "note": _vpin_note(vpin_df),
+        "note": _vpin_note(vpin_result),
         "too_few": too_few,
     }
 
 
-def _vpin_note(vpin_df: pd.DataFrame) -> str:
+def _vpin_note(vpin_result: VpinResult) -> str:
     """Say how ``bucket_volume="fit"`` sized the buckets, or return ``""``."""
-    rule = str(vpin_df.attrs.get("bucket_volume_rule", ""))
+    rule = vpin_result.bucket_volume_rule
     if not rule.startswith("total/"):
         return ""
     divisor = rule.removeprefix("total/")
-    size = vpin_df.attrs["bucket_volume"]
-    n_buckets = vpin_df.attrs["n_buckets"]
+    size = vpin_result.bucket_volume
+    n_buckets = vpin_result.n_buckets
     return (
         f"Each bucket holds {size:,.4g} of volume: the capture's total ÷ "
         f"{divisor}. The usual size, a day's volume ÷ 50, fills fewer than "
@@ -3130,11 +3139,11 @@ def _horizon_bands(ofi: np.ndarray) -> dict[str, Any]:
 
 
 def prepare_kyle_lambda_data(
-    kyle_result: Any, *, level: Level | str | None = _UNSET
+    kyle_result: KyleLambdaResult, *, level: Level | str | None = _UNSET
 ) -> dict[str, Any]:
     """Prepare data for Kyle's Lambda regression scatter."""
     resolve_level("kyle_lambda", level)
-    reg_df = kyle_result.regression_df
+    reg_df = kyle_result.table
     lambda_ = kyle_result.lambda_
     r_squared = kyle_result.r_squared
     t_stat = kyle_result.t_stat

@@ -13,7 +13,9 @@ import pytest
 
 go = pytest.importorskip("plotly.graph_objects", reason="plotly not installed")
 
+from ob_analytics.book import BookSnapshot
 from ob_analytics.exceptions import UnknownNameError
+from ob_analytics.flow_toxicity import KyleLambdaResult, VpinResult
 from ob_analytics.visualization import plot, prepare
 from ob_analytics.visualization._plotly import (
     _biased_color_norm,
@@ -416,19 +418,21 @@ class TestPlotlyTradeTapeL3:
 
 
 class TestPlotlyBookSnapshot:
-    def test_aggregate_returns_figure(self, plot_order_book: dict) -> None:
+    def test_aggregate_returns_figure(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L2")
         fig = plotly_book_snapshot_aggregate(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # bid + ask bars
 
-    def test_per_order_returns_figure(self, plot_order_book: dict) -> None:
+    def test_per_order_returns_figure(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L3")
         fig = plotly_book_snapshot_per_order(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2
 
-    def test_per_order_uses_white_separators(self, plot_order_book: dict) -> None:
+    def test_per_order_uses_white_separators(
+        self, plot_order_book: BookSnapshot
+    ) -> None:
         # Dark separators were invisible on the dark plot background; white shows.
         data = prepare.book_snapshot(plot_order_book, level="L3")
         fig = plotly_book_snapshot_per_order(data)
@@ -438,7 +442,7 @@ class TestPlotlyBookSnapshot:
             for tr in fig.data
         )
 
-    def test_horizontal_orientation(self, plot_order_book: dict) -> None:
+    def test_horizontal_orientation(self, plot_order_book: BookSnapshot) -> None:
         # §3.1: ladder is horizontal (price on y, size on x).
         data = prepare.book_snapshot(plot_order_book, level="L2")
         fig = plotly_book_snapshot_aggregate(data)
@@ -454,7 +458,7 @@ class TestPlotlyBookSnapshot:
         ],
     )
     def test_payload_level_mismatch_raises(
-        self, plot_order_book: dict, renderer, wrong_per_order: bool
+        self, plot_order_book: BookSnapshot, renderer, wrong_per_order: bool
     ) -> None:
         # The payload's per_order stamp must match the renderer's level.
         from ob_analytics.exceptions import ConfigError
@@ -467,13 +471,13 @@ class TestPlotlyBookSnapshot:
 
 
 class TestPlotlyDepthChart:
-    def test_aggregate_returns_figure(self, plot_order_book: dict) -> None:
+    def test_aggregate_returns_figure(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L2")
         fig = plotly_depth_chart_aggregate(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # bid + ask step curves
 
-    def test_per_order_returns_figure(self, plot_order_book: dict) -> None:
+    def test_per_order_returns_figure(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L3")
         fig = plotly_depth_chart_per_order(data)
         assert isinstance(fig, go.Figure)
@@ -487,7 +491,7 @@ class TestPlotlyDepthChart:
         ],
     )
     def test_payload_level_mismatch_raises(
-        self, plot_order_book: dict, renderer, wrong_per_order: bool
+        self, plot_order_book: BookSnapshot, renderer, wrong_per_order: bool
     ) -> None:
         # The payload's per_order stamp must match the renderer's level.
         from ob_analytics.exceptions import ConfigError
@@ -532,6 +536,13 @@ class TestPlotlyEventsHistogram:
         assert "no data" in fig.layout.title.text
 
 
+def _fit(table: pd.DataFrame) -> VpinResult:
+    """A :func:`vpin` result holding *table*, with a given bucket size."""
+    return VpinResult(
+        table=table, bucket_volume=1.0, bucket_volume_rule="given", n_buckets=50
+    )
+
+
 class TestPlotlyVpin:
     def test_returns_plotly_figure(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
@@ -542,7 +553,7 @@ class TestPlotlyVpin:
                 "vpin_avg": [0.3, 0.4, 0.5, 0.45, 0.5],
             }
         )
-        data = prepare.vpin(vpin_df)
+        data = prepare.vpin(_fit(vpin_df))
         fig = plotly_vpin(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # bar + rolling avg line
@@ -552,7 +563,7 @@ class TestPlotlyVpin:
         # overlapping at sub-second cadence.  width is set in ms (60s bucket).
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
         vpin_df = pd.DataFrame({"timestamp_end": ts, "vpin": [0.3, 0.5, 0.7, 0.4, 0.6]})
-        data = prepare.vpin(vpin_df)
+        data = prepare.vpin(_fit(vpin_df))
         fig = plotly_vpin(data)
         bar = next(tr for tr in fig.data if tr.type == "bar")
         # 0.6 * 60s bucket = 36s = 36_000 ms.
@@ -567,7 +578,7 @@ class TestPlotlyVpin:
                 "vpin_avg": pd.Series(dtype="float64"),
             }
         )
-        fig = plotly_vpin(prepare.vpin(vpin_df))
+        fig = plotly_vpin(prepare.vpin(_fit(vpin_df)))
         assert "no complete buckets" in fig.layout.title.text
         assert len(fig.data) == 0
 
@@ -594,18 +605,19 @@ class TestPlotlyOfi:
 
 class TestPlotlyKyleLambda:
     def test_returns_plotly_figure(self) -> None:
-        class FakeResult:
-            regression_df = pd.DataFrame(
+        fit = KyleLambdaResult(
+            lambda_=0.01,
+            t_stat=2.1,
+            r_squared=0.5,
+            n_windows=3,
+            table=pd.DataFrame(
                 {
                     "signed_volume": [1.0, -2.0, 3.0],
                     "delta_price": [0.01, -0.02, 0.03],
                 }
-            )
-            lambda_ = 0.01
-            r_squared = 0.5
-            t_stat = 2.1
-
-        data = prepare.kyle_lambda(FakeResult())
+            ),
+        )
+        data = prepare.kyle_lambda(fit)
         fig = plotly_kyle_lambda(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 2  # scatter + regression line

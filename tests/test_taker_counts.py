@@ -5,6 +5,8 @@ trades.  The order flow imbalance and VPIN tables add ``n_takers`` when the
 trades name their takers, and the cards apply ``MIN_TRADES`` to it.
 """
 
+from dataclasses import replace
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -132,25 +134,25 @@ class TestImbalanceCountsTakers:
 class TestVpinCountsTakers:
     @pytest.mark.parametrize("sign_method", [None, "bvc"])
     def test_buckets_count_takers(self, sign_method) -> None:
-        got = vpin(_l3_tape(), bucket_volume=6.0, sign_method=sign_method)
+        got = vpin(_l3_tape(), bucket_volume=6.0, sign_method=sign_method).table
         assert list(got["n_trades"]) == [6, 6, 6, 6]
         assert list(got["n_takers"]) == [1, 1, 6, 6]
 
     @pytest.mark.parametrize("sign_method", [None, "bvc"])
     def test_an_l2_tape_has_no_taker_count(self, sign_method) -> None:
-        got = vpin(_l2_tape(), bucket_volume=6.0, sign_method=sign_method)
+        got = vpin(_l2_tape(), bucket_volume=6.0, sign_method=sign_method).table
         assert "n_takers" not in got.columns
 
     def test_a_split_trade_counts_in_both_buckets(self) -> None:
         tape = _tape(["a", "b", "c"], [1.0, 2.0, 3.0], ["buy"] * 3)
         tape["volume"] = [1.0, 2.0, 1.0]
         # Trade "b" fills the end of bucket 0 and the start of bucket 1.
-        got = vpin(tape, bucket_volume=2.0)
+        got = vpin(tape, bucket_volume=2.0).table
         assert list(got["n_takers"]) == [2, 2]
 
     @pytest.mark.parametrize("sign_method", [None, "bvc"])
     def test_no_full_bucket_still_has_the_column(self, sign_method) -> None:
-        got = vpin(_l3_tape(), bucket_volume=100.0, sign_method=sign_method)
+        got = vpin(_l3_tape(), bucket_volume=100.0, sign_method=sign_method).table
         assert got.empty
         assert got["n_takers"].dtype == np.dtype("int64")
         assert list(got.columns).index("n_takers") == (
@@ -176,7 +178,7 @@ class TestVpinCountsTakers:
     def test_the_card_floor_reads_takers_over_trades(self) -> None:
         got = vpin(_l3_tape(), bucket_volume=6.0)
         assert prepare.vpin(got, min_trades=4)["too_few"].startswith("Too few taker")
-        got = got.drop(columns="n_takers")
+        got = replace(got, table=got.table.drop(columns="n_takers"))
         assert prepare.vpin(got, min_trades=4)["too_few"] == ""
 
     def test_one_taker_per_bucket_reads_in_the_singular(self) -> None:

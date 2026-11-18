@@ -396,7 +396,7 @@ class TestPartlyLabelledFeedReachesTheMetrics:
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_does_not_count_the_blanks_as_sells(self):
-        vpin_df = vpin(self._half_labelled(), bucket_volume=2.0)
+        vpin_df = vpin(self._half_labelled(), bucket_volume=2.0).table
 
         assert vpin_df["sell_volume"].sum() == 0.0
         assert vpin_df["vpin"].eq(1.0).all()
@@ -418,7 +418,7 @@ class TestPartlyLabelledFeedReachesTheMetrics:
         """
         result = kyle_lambda(self._half_labelled(), window="1min")
 
-        signed = result.regression_df["signed_volume"]
+        signed = result.table["signed_volume"]
         assert (signed > 0).all()
         assert float(signed.sum()) == pytest.approx(10.0)
 
@@ -490,11 +490,11 @@ class TestFlowToxicityFallback:
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_without_direction_uses_tick(self):
         trades = _trades(self._prices())
-        got = vpin(trades, bucket_volume=2.0)
+        got = vpin(trades, bucket_volume=2.0).table
         # Equivalent to classifying first, then running the native path.
         seeded = trades.copy()
         seeded["direction"] = classify_trade_sign(trades, sign_method="tick")
-        expected = vpin(seeded, bucket_volume=2.0)
+        expected = vpin(seeded, bucket_volume=2.0).table
         pd.testing.assert_frame_equal(got, expected)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -502,9 +502,9 @@ class TestFlowToxicityFallback:
         trades = _trades(self._prices())
         trades["direction"] = ["buy", "sell"] * 6
         # sign_method=None must honor the native direction (not reclassify).
-        got = vpin(trades, bucket_volume=2.0)
+        got = vpin(trades, bucket_volume=2.0).table
         # Reclassifying would change the split; assert it did NOT.
-        reclassified = vpin(trades, bucket_volume=2.0, sign_method="tick")
+        reclassified = vpin(trades, bucket_volume=2.0, sign_method="tick").table
         assert not np.allclose(got["vpin"].to_numpy(), reclassified["vpin"].to_numpy())
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -517,14 +517,16 @@ class TestFlowToxicityFallback:
                 "best_ask_price": trades["price"] + 0.5,
             }
         )
-        got = vpin(trades, bucket_volume=2.0, sign_method="lee_ready", quotes=quotes)
+        got = vpin(
+            trades, bucket_volume=2.0, sign_method="lee_ready", quotes=quotes
+        ).table
         assert not got.empty
         assert {"vpin", "vpin_avg"}.issubset(got.columns)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_bvc_path(self):
         trades = _trades(self._prices())
-        got = vpin(trades, bucket_volume=2.0, sign_method="bvc")
+        got = vpin(trades, bucket_volume=2.0, sign_method="bvc").table
         assert list(got.columns) == [
             "bucket",
             "timestamp_start",
@@ -616,7 +618,7 @@ class TestBitstampValidationHarness:
         total_volume = float(res.trades["volume"].sum()) * res.config.lot_size
         bucket = total_volume / 10.0
 
-        vpin_tick = vpin(l2_trades, bucket_volume=bucket, n_buckets=5)
+        vpin_tick = vpin(l2_trades, bucket_volume=bucket, n_buckets=5).table
         assert not vpin_tick.empty
         assert vpin_tick["vpin"].between(0, 1).all()
 
@@ -626,10 +628,12 @@ class TestBitstampValidationHarness:
             n_buckets=5,
             sign_method="lee_ready",
             quotes=quotes,
-        )
+        ).table
         assert not vpin_lee.empty
 
-        vpin_bvc = vpin(l2_trades, bucket_volume=bucket, n_buckets=5, sign_method="bvc")
+        vpin_bvc = vpin(
+            l2_trades, bucket_volume=bucket, n_buckets=5, sign_method="bvc"
+        ).table
         assert not vpin_bvc.empty
 
         ofi = order_flow_imbalance(l2_trades, window="1min")

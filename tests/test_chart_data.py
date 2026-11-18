@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ob_analytics.book import BookSnapshot
+from ob_analytics.flow_toxicity import KyleLambdaResult, VpinResult
 from ob_analytics.visualization import prepare
 from ob_analytics.visualization._data import (
     _default_start_end,
@@ -502,7 +504,7 @@ class TestPrepareTradeTapeL3:
 
 
 class TestPrepareBookSnapshot:
-    def test_returns_book_sides(self, plot_order_book: dict) -> None:
+    def test_returns_book_sides(self, plot_order_book: BookSnapshot) -> None:
         data = prepare.book_snapshot(plot_order_book, level="L2")
         assert "bids" in data
         assert "asks" in data
@@ -514,14 +516,16 @@ class TestPrepareBookSnapshot:
                 side.columns
             )
 
-    def test_sizes_are_not_rescaled(self, plot_order_book: dict) -> None:
+    def test_sizes_are_not_rescaled(self, plot_order_book: BookSnapshot) -> None:
         # Issue #487: the bars carry the book's own sizes, with no hidden factor.
         data = prepare.book_snapshot(plot_order_book, level="L2")
         assert data["asks"]["volume"].tolist() == [150, 250]
         assert data["asks"]["liquidity"].tolist() == [150, 400]
         assert "volume_scale" not in data
 
-    def test_aggregate_zeroes_segment_floor(self, plot_order_book: dict) -> None:
+    def test_aggregate_zeroes_segment_floor(
+        self, plot_order_book: BookSnapshot
+    ) -> None:
         # L2 bars sit on the axis: each level is one segment from 0.
         data = prepare.book_snapshot(plot_order_book, level="L2")
         assert (data["bids"]["seg_lo"] == 0).all()
@@ -529,11 +533,16 @@ class TestPrepareBookSnapshot:
 
     def test_per_order_stacks_within_level(self) -> None:
         # Two orders at one price stack: seg_lo of the second == seg_hi of first.
-        book = {
-            "timestamp": 1430445600,
-            "bids": np.array([[236.0, 100, 100], [236.0, 50, 150]]),
-            "asks": np.empty((0, 3)),
-        }
+        book = BookSnapshot(
+            timestamp=pd.Timestamp(1430445600, unit="s"),
+            bids=pd.DataFrame(
+                [[236.0, 100, 100], [236.0, 50, 150]],
+                columns=["price", "volume", "liquidity"],
+            ),
+            asks=pd.DataFrame(
+                np.empty((0, 3)), columns=["price", "volume", "liquidity"]
+            ),
+        )
         data = prepare.book_snapshot(book, level="L3")
         bids = data["bids"]
         assert data["per_order"] is True
@@ -643,6 +652,13 @@ class TestPrepareEventsHistogram:
         assert len(prices) < len(plot_events)  # outliers were clipped
 
 
+def _fit(table: pd.DataFrame) -> VpinResult:
+    """A :func:`vpin` result holding *table*, with a given bucket size."""
+    return VpinResult(
+        table=table, bucket_volume=1.0, bucket_volume_rule="given", n_buckets=50
+    )
+
+
 class TestPrepareVpin:
     def test_returns_vpin_data(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
@@ -653,7 +669,7 @@ class TestPrepareVpin:
                 "vpin_avg": [0.3, 0.4, 0.5, 0.45, 0.5],
             }
         )
-        data = prepare.vpin(vpin_df, threshold=0.7)
+        data = prepare.vpin(_fit(vpin_df), threshold=0.7)
         assert data["threshold"] == 0.7
         assert "bar_width" in data
         assert len(data["vpin_df"]) == 5
@@ -725,18 +741,19 @@ class TestPrepareOfiByWindow:
 
 class TestPrepareKyleLambda:
     def test_extracts_fields(self) -> None:
-        class FakeResult:
-            regression_df = pd.DataFrame(
+        fit = KyleLambdaResult(
+            lambda_=0.01,
+            t_stat=2.1,
+            r_squared=0.5,
+            n_windows=3,
+            table=pd.DataFrame(
                 {
                     "signed_volume": [1.0, -2.0, 3.0],
                     "delta_price": [0.01, -0.02, 0.03],
                 }
-            )
-            lambda_ = 0.01
-            r_squared = 0.5
-            t_stat = 2.1
-
-        data = prepare.kyle_lambda(FakeResult())
+            ),
+        )
+        data = prepare.kyle_lambda(fit)
         assert data["lambda_"] == 0.01
         assert data["r_squared"] == 0.5
         assert len(data["reg_df"]) == 3
