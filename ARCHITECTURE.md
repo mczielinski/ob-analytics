@@ -97,21 +97,24 @@ seconds depend on the machine; the memory does much less.)*
 ### Where the time goes
 
 Per stage, on the bundled 314k-event sample, from the speed baseline that CI
-compares against (`bench-baseline.json`, recorded on 2026-10-24 on the
+compares against (`bench-baseline.json`, recorded on 2026-11-18 on the
 ubuntu-24.04 GitHub runner by `scripts/bench_scale.py --update-baseline`). The shape
-holds on other machines; the seconds do not:
+holds on other machines; the seconds do not. GitHub runners also differ from
+one run to the next: on main, `summarize_depth` has taken between 5 and 17
+seconds on the sample. This baseline comes from a run in the middle of that
+range.
 
 | stage | seconds | share |
 |-------|--------:|------:|
-| `load` | 0.82 | 6% |
-| `set_order_types` | 0.31 | 2% |
-| `price_level_volume` | 0.27 | 2% |
-| `summarize_depth` | 11.44 | 83% |
-| `order_aggressiveness` | 0.15 | 1% |
-| `queue_positions` | 0.82 | 6% |
+| `load` | 0.68 | 5% |
+| `set_order_types` | 0.19 | 1% |
+| `price_level_volume` | 0.21 | 1% |
+| `summarize_depth` | 11.87 | 84% |
+| `order_aggressiveness` | 0.16 | 1% |
+| `queue_positions` | 1.01 | 7% |
 
-One numpy kernel is about 80% of the run. The stateful FIFO loop is 6%, and
-everything the loader and the frames do together is under 15% — which is the
+One numpy kernel is about 85% of the run. The stateful FIFO loop is 7%, and
+everything the loader and the frames do together is under 10% — which is the
 number [ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md)
 asks for before a second
 dataframe library could pay for itself, and it falls well short of the 30% gate

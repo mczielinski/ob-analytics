@@ -1569,6 +1569,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   It understated the stage about ten times. It now calls the public
   `ob_analytics.queue.queue_positions`, which sorts the events into time order
   first.
+- **The speed baseline is recorded again after the queue fixes** (#521).
+  `bench-baseline.json` and the stage timings on the Architecture page come
+  from a new run on the CI runner, after #489 and #520. On the sample,
+  `queue_positions` takes 1.01 s, 7% of a run. Before the two fixes, the
+  same call took about 9 s on one desktop, about 40% of a run, not the 6% the
+  old table gave. Runner speed varies from run to run, so the baseline comes
+  from a run of typical speed: the check fails a stage at twice its baseline,
+  and a baseline from a fast runner would fail on a slow one.
 - **No negative depth bins at low prices** (#488). With the default
   `depth_bps=25` and `depth_bins=20`, a best price under about 100 ticks, as on
   every cent-priced prediction market, could give a negative size in the last
