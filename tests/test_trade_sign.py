@@ -531,6 +531,7 @@ class TestFlowToxicityFallback:
             "timestamp_end",
             "buy_volume",
             "sell_volume",
+            "n_trades",
             "vpin",
             "vpin_avg",
         ]

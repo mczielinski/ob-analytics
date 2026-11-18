@@ -91,6 +91,7 @@ class TestComputeVpin:
             "timestamp_end",
             "buy_volume",
             "sell_volume",
+            "n_trades",
             "vpin",
             "vpin_avg",
         }
@@ -127,6 +128,7 @@ class TestComputeVpin:
             "timestamp_end": trades["timestamp"].dtype,
             "buy_volume": np.dtype("float64"),
             "sell_volume": np.dtype("float64"),
+            "n_trades": np.dtype("int64"),
             "vpin": np.dtype("float64"),
             "vpin_avg": np.dtype("float64"),
         }
@@ -630,7 +632,14 @@ class TestOrderFlowImbalance:
         """Returns expected columns."""
         trades = _trades(["buy", "sell"], volumes=[1.0, 1.0])
         result = order_flow_imbalance(trades, window="1min")
-        expected = {"timestamp", "buy_volume", "sell_volume", "signed_volume", "ofi"}
+        expected = {
+            "timestamp",
+            "buy_volume",
+            "sell_volume",
+            "signed_volume",
+            "n_trades",
+            "ofi",
+        }
         assert set(result.columns) == expected
 
     def test_all_buys_ofi_one(self):
@@ -786,7 +795,8 @@ class TestFlowToxicityPlots:
         """plot_vpin returns a Figure."""
         trades = _trades(["buy"] * 10, volumes=[1.0] * 10)
         vpin_df = vpin(trades, bucket_volume=2.0)
-        fig = plot("vpin", **prepare.vpin(vpin_df))
+        # Two trades a bucket: below the card's floor, so lower it to draw.
+        fig = plot("vpin", **prepare.vpin(vpin_df, min_trades=1))
         assert drawn(fig)["rectangle"] == len(vpin_df)  # a bar for each bucket
 
     @pytest.mark.parametrize(

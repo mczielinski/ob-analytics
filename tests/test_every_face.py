@@ -6,7 +6,8 @@ the per-plot tests draw one face each.  This module draws each coordinate
 from one run of the bundled sample, so a face added to the table is drawn here
 without a new test.  Each figure must pass three checks:
 
-* it has marks (:func:`tests._drawn.drawn`);
+* it has marks (:func:`tests._drawn.drawn`), or its data says why it has
+  none (:data:`_REASON_KEYS`) and the figure shows that text;
 * its time and price axes lie inside the run: a time axis inside the run's
   span, give or take a tenth of its length; a price axis inside the traded
   prices, give or take their range once more;
@@ -21,7 +22,7 @@ figure computes its ranges in the browser, so it is checked for marks only.
 
 A face the gallery does not build on the sample (it needs LOBSTER data, or it
 is drawn by ``plot()`` only) is bound in :data:`_EXTRA_SPECS`.  A face that
-fails today is listed in :data:`KNOWN_FAILURES` as a strict xfail, so the
+fails a check is listed in :data:`KNOWN_FAILURES` as a strict xfail, so the
 marker has to go when the face is fixed.
 """
 
@@ -56,22 +57,17 @@ from tests._drawn import drawn
 
 Coordinate = tuple[str, Level | None, str]
 
-# Faces that fail the range check today.  Each is a strict xfail that expects
-# :class:`OutOfRange` only: when the face is fixed the test passes and the
-# strict marker fails the run, and when it fails another check (no marks, a
-# size) the failure is reported.  Either way the entry must be looked at.
-_BOOK_SIGNALS = (
-    "#497: the price axis starts at 0, because empty book sides count as a price of 0"
-)
-_ONE_WINDOW = "#497: a measure with one window is drawn on a time axis"
-KNOWN_FAILURES: dict[Coordinate, str] = {
-    ("book_signals", None, "matplotlib"): _BOOK_SIGNALS,
-    ("book_signals", None, "plotly"): _BOOK_SIGNALS,
-    # The time axis spans three years around the one point.
-    ("amihud", None, "matplotlib"): _ONE_WINDOW,
-    # The one value is NaN, so the time axis falls back to 1970.
-    ("roll_spread", None, "matplotlib"): _ONE_WINDOW,
-}
+# Faces that fail the range check, each with the reason.  Each is a strict
+# xfail that expects :class:`OutOfRange` only: when the face is fixed the test
+# passes and the strict marker fails the run, and when it fails another check
+# (no marks, a size) the failure is reported.  Either way the entry must be
+# looked at.  None fails today.
+KNOWN_FAILURES: dict[Coordinate, str] = {}
+
+#: Payload entries in which a face says why it draws no marks: the one value
+#: of a measure with one window (``headline``), or too few trades to draw
+#: (``too_few``).  Empty when the face draws.
+_REASON_KEYS = ("headline", "too_few")
 
 
 def _hidden_executions(display: PipelineResult) -> PlotSpec:
@@ -317,6 +313,24 @@ def _payload_size_max(payload: Any, named: bool = False) -> float:
     return best
 
 
+def _figure_text(fig: Any) -> str:
+    """Every piece of text a matplotlib, plotly or bokeh figure shows, joined."""
+    from matplotlib.figure import Figure
+    from matplotlib.text import Text
+
+    if isinstance(fig, Figure):
+        return " ".join(t.get_text() for t in fig.findobj(Text))
+    if hasattr(fig, "layout"):  # plotly
+        parts = [fig.layout.title.text or ""]
+        parts += [a.text or "" for a in fig.layout.annotations]
+        # Plotly breaks a line with <br>.
+        return " ".join(parts).replace("<br>", "\n")
+    from bokeh.models import Label, Title
+
+    models = [*fig.select({"type": Label}), *fig.select({"type": Title})]
+    return " ".join(m.text or "" for m in models)
+
+
 # ── The test ──────────────────────────────────────────────────────────
 
 
@@ -347,7 +361,11 @@ def test_face_draws_inside_the_data(faces: Faces, coordinate: Coordinate) -> Non
     payload = faces.payload(key, level)
     fig = plot(key, level, backend=backend, **payload)
 
-    assert drawn(fig), f"{key} at {level} drew no marks on {backend}"
+    if not drawn(fig):
+        reason = next((payload[k] for k in _REASON_KEYS if payload.get(k)), "")
+        assert reason, f"{key} at {level} drew no marks on {backend}, and no reason"
+        assert reason in _figure_text(fig), f"{reason!r} is not on the figure"
+        return
     if backend == "bokeh":
         return
 

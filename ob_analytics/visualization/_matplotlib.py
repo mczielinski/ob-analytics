@@ -1863,6 +1863,13 @@ def mpl_vpin(
 
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 5))
+    too_few = data.get("too_few")
+    if too_few:
+        # Buckets of a few trades sit near 1 whatever the flow: say so, not draw.
+        ax.set_axis_off()
+        ax.set_title("Volume-Synchronized Probability of Informed Trading")
+        _draw_notice(ax, too_few, pal)
+        return fig
     if vpin_df.empty:
         # A capture shorter than one bucket fills none; an empty datetime
         # column makes ax.bar raise, so draw the bare panel instead.
@@ -1926,10 +1933,38 @@ def mpl_vpin(
 def mpl_window_measure(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """Render one value per window: the Amihud and Roll faces."""
+    """Render one value per window: the Amihud and Roll faces.
+
+    A single window is drawn as its value, in large type, with no time axis.
+    """
     pal = theme.palette
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 5))
+    headline = data.get("headline")
+    if headline:
+        ax.set_axis_off()
+        _set_title(ax, data["title"], data["notice"], pal)
+        ax.text(
+            0.5,
+            0.55,
+            headline,
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=40,
+            color=pal.series,
+        )
+        ax.text(
+            0.5,
+            0.3,
+            data["ylabel"],
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=12,
+            color=pal.reference_line,
+        )
+        return fig
     ax.plot(
         data["times"],
         data["values"],
@@ -2029,14 +2064,24 @@ def mpl_order_flow_imbalance(
     pal = theme.palette
     ofi_df = data["ofi_df"]
     trades = data["trades"]
+    too_few = data.get("too_few")
+    if too_few or ofi_df.empty:
+        # An empty datetime column makes ax.bar raise: write why instead.
+        fig, ax = _create_axes(ax, figsize=(12, 5))
+        ax.set_axis_off()
+        ax.set_title("Order Flow Imbalance")
+        _draw_notice(ax, too_few or "No windows to draw.", pal)
+        return fig
     # Buy pressure (OFI >= 0) in the buy colour, sell pressure in the sell colour.
     colors = np.where(ofi_df["ofi"].to_numpy() >= 0, pal.buy, pal.sell)
 
     # Bar width in matplotlib date-number units (days): 80% of the median
     # inter-bar gap. Computed here because it is backend-specific to the
     # date-number x-axis.
-    if len(ofi_df) > 1:
+    median_gap = data.get("bar_gap")
+    if median_gap is None and len(ofi_df) > 1:
         median_gap = ofi_df["timestamp"].diff().median()
+    if median_gap is not None:
         bar_width = mdates.date2num(
             ofi_df["timestamp"].iloc[0] + median_gap * 0.8
         ) - mdates.date2num(ofi_df["timestamp"].iloc[0])
@@ -2060,7 +2105,7 @@ def mpl_order_flow_imbalance(
     ax.set_ylim(-1.05, 1.05)
     ax.set_xlabel("Time")
     ax.set_ylabel("OFI")
-    ax.set_title("Order Flow Imbalance")
+    _set_title(ax, "Order Flow Imbalance", data.get("notice"), pal)
     format_time_axis(ax)
 
     if trades is not None and "price" in trades.columns:
