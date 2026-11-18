@@ -41,7 +41,7 @@ in one of two ways, and replays either through the [L2 path](l2-depth.md):
 pip install "ob-analytics[ccxt]"
 
 ob-analytics capture ccxt --venue kalshi --pair KXPRESNOMD-28-MK --minutes 10 -o /tmp/kalshi
-ob-analytics process /tmp/kalshi --source depth_csv --gallery --output /tmp/kalshi_out
+ob-analytics process /tmp/kalshi --gallery --output /tmp/kalshi_out
 ```
 
 ## Find a market ticker
@@ -211,8 +211,8 @@ export KALSHI_API_KEY_ID=<your key id>
 export KALSHI_PRIVATE_KEY_PATH=~/.config/kalshi/private-key.pem
 
 ob-analytics capture kalshi --pair KXPRESNOMD-28-MK --minutes 10 -o /tmp/kalshi_ws
-ob-analytics audit /tmp/kalshi_ws --source depth_csv
-ob-analytics process /tmp/kalshi_ws --source depth_csv --gallery --output /tmp/kalshi_ws_out
+ob-analytics audit /tmp/kalshi_ws
+ob-analytics process /tmp/kalshi_ws --gallery --output /tmp/kalshi_ws_out
 ```
 
 The capture writes the same files as the polled capture, and the book is the

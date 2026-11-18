@@ -167,8 +167,8 @@ sorted(available_concepts(result))    # only the L2-supported concepts
 
 ## Checking data quality
 
-`ob-analytics audit <source> --source depth_csv` (and
-`data_quality_summary`) work on an L2 result: the crossed-book % is read from
+`ob-analytics audit <capture>` (add `--source depth_csv` for a price-level
+CSV that is not a capture) and `data_quality_summary` work on an L2 result: the crossed-book % is read from
 the price-level book, and the per-order metrics report zero. Every L2 source
 declares `FeedType.PRICE_LEVELS`, so a crossed book fails the run: the venue's
 own book does not cross.

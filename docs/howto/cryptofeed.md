@@ -289,5 +289,5 @@ A venue that publishes no sequence number is never scored, and reports zero.
 - [Capture live data](live-capture.md) — the capture framework and writing a bespoke venue
 - [Process L2 (price-level) feeds](l2-depth.md) — what a captured `depth.csv` flows through
 - [Check data quality](audit.md) — run `audit` on the captured output. A
-  capture records which source made it, so `audit --source bitstamp` on a
-  cryptofeed L3 capture checks it against what cryptofeed can show
+  capture records which source made it, so `audit` on a cryptofeed L3
+  capture reads it as `bitstamp` and checks it against what cryptofeed can show
