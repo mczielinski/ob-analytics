@@ -243,6 +243,23 @@ class TestDetectIcebergs:
         assert found["peak"].isna().tolist() == [True]
         assert found_slices["volume"].isna().tolist() == [True, False]
 
+    def test_float_sizes_in_display_units_are_kept(self):
+        # A result already in display units (display_result) has float sizes
+        # that are not whole numbers.  Casting them to Int64 raised, so the
+        # gallery silently dropped its hidden-liquidity overlay (#510).
+        s = _Stream()
+        s.add(1, 0, "created", 0.5)
+        s.add(1, 1_000, "changed", 0.0, 0.5, maker=True)
+        s.add(2, 1_250, "created", 0.5)
+        s.add(2, 9_000, "deleted", 0.5)
+        events, trades = s.frames()
+
+        found = detect_icebergs(events, trades)
+        found_slices = iceberg_slices(events, trades)
+
+        assert found["peak"].tolist() == [0.5]
+        assert found_slices["volume"].tolist() == [0.5, 0.5]
+
     def test_hidden_order_id_never_forms_a_slice(self):
         s = _Stream()
         s.add(0, 1_000, "changed", 0, 100, maker=True)  # LOBSTER hidden execution

@@ -1765,6 +1765,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   Independent Reserve capture, a refill made `detect_icebergs` raise
   `ValueError`, and the gallery left out its hidden-liquidity overlay. The
   slices now keep each order `id` as the feed writes it.
+- **`detect_icebergs` reads a result in display units** (#510). On a result
+  from `display_result`, whose sizes are floats, it raised `TypeError` when it
+  cast the slice sizes to integers. The gallery then left out its
+  hidden-liquidity overlay without a word; the new plot warning showed it.
+  Float sizes now stay floats.
 - **The Bokeh depth heatmap draws the hidden-liquidity overlay** (#410).
   With `backend="bokeh"`, the iceberg chains and refill markers and the
   trades against hidden orders were left out without a word. Bokeh now draws
