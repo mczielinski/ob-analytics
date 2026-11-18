@@ -279,3 +279,148 @@ class TestLiveLevels:
             if live:
                 expected = max(live) if direction == Direction.BID else min(live)
             assert levels.best() == expected
+
+
+class TestArrivalQueue:
+    """A level's rank and volume ahead match a walk of the queue (#520).
+
+    ``emit`` used to walk each order's level to find these; the Fenwick trees
+    must report the same numbers after every kind of change to the queue.
+    """
+
+    @staticmethod
+    def _walk(queue: dict[int, float], oid: int) -> tuple[int, float, float]:
+        rank, ahead = 1, 0
+        for other_id, size in queue.items():
+            if other_id == oid:
+                return rank, ahead, size
+            rank += 1
+            ahead += size
+        raise KeyError(oid)
+
+    @pytest.mark.parametrize("tree_from", [2, 32])
+    def test_adds_fills_cancels(
+        self, tree_from: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ob_analytics.engine import _queue
+
+        monkeypatch.setattr(_queue, "_TREE_FROM", tree_from)
+        q = _queue._ArrivalQueue(exact=True)
+        for oid, size in [(1, 5), (2, 7), (3, 11), (4, 13)]:
+            q.append(oid, size)
+        assert [q.position(oid) for oid in (1, 2, 3, 4)] == [
+            (1, 0, 5),
+            (2, 5, 7),
+            (3, 12, 11),
+            (4, 23, 13),
+        ]
+        q.resize(2, 3)  # a partial fill keeps the place
+        assert q.position(2) == (2, 5, 3)
+        assert q.position(4) == (4, 19, 13)
+        q.remove(1)  # the front order leaves
+        assert q.position(2) == (1, 0, 3)
+        assert q.position(4) == (3, 14, 13)
+        q.remove(3)  # a cancel in the middle
+        assert q.position(4) == (2, 3, 13)
+        q.append(1, 2)  # back again: to the back of the queue
+        assert q.position(1) == (3, 16, 2)
+        assert len(q) == 3
+
+    def test_long_queue_matches_a_walk(self) -> None:
+        from ob_analytics.engine import _queue
+
+        q = _queue._ArrivalQueue(exact=True)
+        reference: dict[int, float] = {}
+        rng = np.random.default_rng(11)
+        next_id = 0
+        # Grow past the length that builds the trees, churn long enough to run
+        # out of slots several times, then drain below the length that drops
+        # them.
+        step = 0
+        while step < 25_000 or reference:
+            step += 1
+            draining = step >= 25_000
+            grow = not draining and (len(reference) < 200 or rng.random() < 0.5)
+            if grow:
+                next_id += 1
+                size = int(rng.integers(1, 1_000_000))
+                q.append(next_id, size)
+                reference[next_id] = size
+            elif reference:
+                oid = list(reference)[int(rng.integers(len(reference)))]
+                if not draining and rng.random() < 0.4:
+                    size = int(rng.integers(1, int(reference[oid]) + 1))
+                    q.resize(oid, size)
+                    reference[oid] = size
+                else:
+                    q.remove(oid)
+                    del reference[oid]
+            if reference and step % 7 == 0:
+                for oid in list(reference)[:: max(1, len(reference) // 5)]:
+                    assert q.position(oid) == self._walk(reference, oid)
+            assert len(q) == len(reference)
+            if step == 25_000:
+                assert q._slot is not None, "the long queue should use the trees"
+        assert not reference and len(q) == 0
+        assert q._slot is None, "the drained queue should walk again"
+
+    def test_float_sizes_are_walked(self) -> None:
+        from ob_analytics.engine import _queue
+
+        q = _queue._ArrivalQueue(exact=False)
+        reference: dict[int, float] = {}
+        for oid in range(100):
+            q.append(oid, 0.1 * (oid + 1))
+            reference[oid] = 0.1 * (oid + 1)
+        for oid in range(0, 100, 3):
+            q.remove(oid)
+            del reference[oid]
+        # Summed in queue order, so the front order has exactly nothing ahead.
+        front = next(iter(reference))
+        assert q.position(front)[:2] == (1, 0)
+        for oid in reference:
+            assert q.position(oid) == self._walk(reference, oid)
+
+    @pytest.mark.parametrize("volume_dtype", ["int64", "float64"])
+    def test_queue_positions_on_a_long_level(self, volume_dtype: str) -> None:
+        """A 40-order level reports what a walk reports.
+
+        Integer sizes are long enough to use the trees; float sizes are walked.
+        """
+        sizes = {
+            oid: 0.1 * oid if volume_dtype == "float64" else oid for oid in range(1, 41)
+        }
+        rows = [
+            {"id": oid, "t": oid, "price": 100, "vol": size, "action": "created"}
+            for oid, size in sizes.items()
+        ]
+        # Cancel every third order, then touch the rest with no size change.
+        t = len(rows)
+        cancelled = set(range(1, 41, 3))
+        for oid in sorted(cancelled):
+            t += 1
+            rows.append(
+                {
+                    "id": oid,
+                    "t": t,
+                    "price": 100,
+                    "vol": sizes[oid],
+                    "action": "deleted",
+                }
+            )
+        resting = {oid: sizes[oid] for oid in sizes if oid not in cancelled}
+        for oid, size in resting.items():
+            t += 1
+            rows.append(
+                {"id": oid, "t": t, "price": 100, "vol": size, "action": "changed"}
+            )
+        ev = _events(rows).astype({"volume": volume_dtype})
+
+        out = queue_positions(ev, levels="all")
+
+        touched = out[out["action"] == "changed"].reset_index(drop=True)
+        assert touched["id"].tolist() == list(resting)
+        expected = [self._walk(resting, oid) for oid in resting]
+        assert touched["rank"].tolist() == [rank for rank, _, _ in expected]
+        assert touched["ahead_volume"].tolist() == [ahead for _, ahead, _ in expected]
+        assert touched["ahead_volume"].iloc[0] == 0
