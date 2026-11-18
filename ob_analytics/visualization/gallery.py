@@ -45,7 +45,6 @@ from ob_analytics.visualization import (
     _concepts,
     _data as _viz_data,
     _resolve_level,
-    infer_volume_scale,
     plot,
     save_figure,
 )
@@ -449,11 +448,7 @@ def _hidden_liquidity_overlay(
         return {}
 
 
-def build_gallery_model(
-    result: PipelineResult,
-    *,
-    volume_scale: float | None = None,
-) -> GalleryModel:
+def build_gallery_model(result: PipelineResult) -> GalleryModel:
     """Build the default gallery model from pipeline results.
 
     Each order-book concept comes from the concept table
@@ -468,10 +463,6 @@ def build_gallery_model(
     ----------
     result : PipelineResult
         Pipeline output.
-    volume_scale : float or None
-        Volume display scale.  ``None`` (default) infers a power-of-10 scale
-        via :func:`infer_volume_scale`, from the events' volumes, or on a
-        price-level run from the depth's (the trades' when there is no depth).
 
     Returns
     -------
@@ -492,16 +483,6 @@ def build_gallery_model(
     # price-level run, which has no events.
     clock = events if not events.empty else depth
 
-    if volume_scale is None:
-        basis = (
-            events["volume"]
-            if not events.empty
-            else (depth["volume"] if not depth.empty else trades.get("volume"))
-        )
-        volume_scale = (
-            infer_volume_scale(basis) if basis is not None and len(basis) else 1.0
-        )
-
     zoom_start, zoom_end = _zoom_window(trades, clock)
     # One mid-anchored price band feeds every clipped face, so faces that get
     # the same bounds stay comparable on shared axes.
@@ -517,7 +498,6 @@ def build_gallery_model(
         depth=depth,
         depth_summary=summary,
         spread=get_spread(depth_summary),
-        volume_scale=volume_scale,
         zoom_start=zoom_start,
         zoom_end=zoom_end,
         summary_start=summary_start,
@@ -537,14 +517,13 @@ def plot_result(
     *,
     backend: str = "matplotlib",
     ax: Axes | None = None,
-    volume_scale: float | None = None,
     theme: PlotTheme | None = None,
     **overrides: Any,
 ) -> Any:
     """Render one plot *concept* straight from a :class:`PipelineResult`.
 
     The one-liner the gallery is built on, without the gallery: it derives the
-    same per-face context (spread, focus window, snapshot, volume scale) via
+    same per-face context (spread, focus window, snapshot) via
     :func:`build_gallery_model` -- the single source of truth for how each
     concept binds to its prepare function -- then prepares and renders the face.
     So ``plot_result(result, "depth_heatmap")`` replaces calling
@@ -569,8 +548,6 @@ def plot_result(
     ax : matplotlib.axes.Axes, optional
         Axes to draw on, as in :func:`~ob_analytics.visualization.plot`
         (Matplotlib only).
-    volume_scale : float or None
-        Display volume scale; ``None`` auto-infers (as the gallery does).
     theme : PlotTheme or None
         Theme for this call, on any backend; ``None`` uses
         :data:`~ob_analytics.visualization.DEFAULT_THEME`.
@@ -615,7 +592,7 @@ def plot_result(
             data["theme"] = theme
         return plot(concept, resolved, backend=backend, ax=ax, **data)
 
-    model = build_gallery_model(result, volume_scale=volume_scale)
+    model = build_gallery_model(result)
     concept_map = {c.key: c for c in model.concepts}
     pc = concept_map.get(concept)
     if pc is None:
@@ -901,7 +878,6 @@ def generate_gallery(
     *,
     model: GalleryModel | None = None,
     view: str = "both",
-    volume_scale: float | None = None,
     backends: list[str] | None = None,
     title: str = "ob-analytics Plot Gallery",
 ) -> Path:
@@ -918,9 +894,6 @@ def generate_gallery(
         Inventory to render.  Defaults to :func:`build_gallery_model`.
     view : str
         One of ``"l2"``, ``"l3"``, ``"both"`` (default), ``"comparison"``.
-    volume_scale : float or None
-        Volume display scale, forwarded to :func:`build_gallery_model` when
-        *model* is built here.  Ignored when *model* is supplied.
     backends : list of str, optional
         Backends to render.  Defaults to ``["plotly", "matplotlib"]`` when
         plotly is installed (plotly is the primary column), else
@@ -960,7 +933,7 @@ def generate_gallery(
             raise ConfigError(
                 "generate_gallery requires either `result` or an explicit `model`."
             )
-        model = build_gallery_model(result, volume_scale=volume_scale)
+        model = build_gallery_model(result)
 
     cards = _project(model, view, backends)
 

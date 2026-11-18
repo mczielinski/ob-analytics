@@ -33,7 +33,7 @@ ob-analytics audit results/ --from-parquet --strict
 
 # Build a gallery from saved Parquet
 ob-analytics gallery results/ -o my_gallery/
-ob-analytics gallery results/ --volume-scale 1e-8 --title "My Analysis"
+ob-analytics gallery results/ --title "My Analysis"
 
 # End-to-end demos (pipeline + gallery)
 ob-analytics bitstamp-demo orders.csv -o demo_out/

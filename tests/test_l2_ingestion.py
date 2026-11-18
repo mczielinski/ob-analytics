@@ -31,10 +31,11 @@ from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import get_spread, price_level_volume, summarize_depth
 from ob_analytics.depth_csv import DepthCsvLoader, DepthCsvTradeReader, DepthCsvWriter
 from ob_analytics.exceptions import ConfigError, UnknownNameError
-from ob_analytics.hidden_liquidity import hidden_trades
+from ob_analytics.hidden_liquidity import detect_icebergs, hidden_trades, iceberg_slices
 from ob_analytics.interop import HftbacktestWriter, NautilusWriter
 from ob_analytics.lobster import LobsterWriter
 from ob_analytics.protocols import Clocks, DepthLoader, FeedType
+from ob_analytics.quality import detect_stale_orders
 from ob_analytics.queue import queue_age_grid, queue_positions
 from ob_analytics.schemas import (
     validate_depth_df,
@@ -529,6 +530,13 @@ class TestPerOrderFunctionsRefuseL2:
             pytest.param(
                 lambda r: hidden_trades(r.events, r.trades, r.depth_summary),
                 id="hidden_trades",
+            ),
+            pytest.param(lambda r: detect_icebergs(r.events, r.trades), id="icebergs"),
+            pytest.param(
+                lambda r: iceberg_slices(r.events, r.trades), id="iceberg_slices"
+            ),
+            pytest.param(
+                lambda r: detect_stale_orders(r.events, r.trades), id="stale_orders"
             ),
         ],
     )

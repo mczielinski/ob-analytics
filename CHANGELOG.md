@@ -130,6 +130,13 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   as "nothing there". The Bitstamp, Databento, hftbacktest and Nautilus
   writers raise it too instead of writing an empty file. The LOBSTER writer
   already refused; its message is now the same as the others'.
+- **The iceberg and stale-order finders refuse an L2 run too** (#505).
+  `detect_icebergs`, `iceberg_slices` and `detect_stale_orders` returned an
+  empty table on a run with no events, which read as "no icebergs" or "no
+  stale orders". They now raise `ConfigError` naming L3, as `hidden_trades`
+  does. Code that called them on an L2 run -> check `result.level` (or
+  `result.events.empty`) first. The gallery and `audit` already skip these
+  checks on an L2 run.
 - **A metric declares `needs`** (#399). A `Metric` without it -> add
   `needs: tuple[str, ...]`, the run's tables it cannot be computed without,
   e.g. `("trades",)`. A metric is skipped on a run where one of them has no
@@ -211,8 +218,8 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   - `prepare.book_snapshot(book)` -> `prepare.book_snapshot(book,
     level="L2")`, and `prepare.book_snapshot(book, per_order=True)` ->
     `prepare.book_snapshot(book, level="L3")`. `per_order` was the second
-    positional argument; `volume_scale`, `show_quantiles` and `top_n` each
-    move up one place.
+    positional argument, and `volume_scale` is gone (see below), so
+    `show_quantiles` and `top_n` each move up two places.
   - `prepare.book_replay(..., per_order=False)` (the default) ->
     `prepare.book_replay(..., level="L2")`, and `per_order=True` ->
     `level="L3"`. `start_time` and the arguments after it each move up one
@@ -320,6 +327,24 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     private name there. The top level now also exports `iceberg_slices`, `list_writers`,
     `register_writer` and `load_writer_plugins`, beside the other
     registries.
+- **Plots draw sizes in the instrument's units** (#487). Every plot
+  multiplied sizes by a power of ten that no axis or colour bar showed, so a
+  2 BTC level was drawn at 200. Sizes now read off an axis as they are in
+  `display_result(result)`.
+  - `volume_scale=` -> removed from every `prepare` function, `plot_result`,
+    `PipelineResult.plot`, `build_gallery_model` and `generate_gallery`. Leave
+    it out. Where it was a positional argument (`prepare.book_snapshot`,
+    `prepare.order_activity` and `prepare.cancellations` at L3,
+    `prepare.liquidity_at_touch` at L2, `prepare.order_outcome`,
+    `prepare.trade_tape` at L3), the arguments after it each move up one
+    place.
+  - `ob-analytics gallery --volume-scale` -> removed.
+  - `infer_volume_scale` -> removed.
+  - The prepared payloads no longer hold a `volume_scale` key.
+  - `volume_from` and `volume_to` of `prepare.depth_heatmap`,
+    `prepare.order_activity` (L2) and `prepare.cancellations` (L2) are now
+    in the instrument's units. They compared against the multiplied sizes
+    before.
 
 ### Added
 
@@ -1471,6 +1496,23 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **A saved run keeps the loader's counts** (#503). The Databento loader
+  counts the records the venue flagged after a gap (`F_MAYBE_BAD_BOOK`), and
+  `audit` warns when there are any. A `run_windows` output lost the count, so
+  `ob-analytics audit --from-parquet` skipped the check. A normal saved run
+  kept it only through pandas' own metadata. Now every Parquet file records
+  its loader's counts as a JSON object under the new metadata key
+  `ob_analytics_loader_counts` (`schemas.LOADER_COUNTS_KEY`), and `load_data`
+  and `load_result` put them back on the frame's `attrs`. A windowed run
+  records the sum over its windows. `to_arrow()` records them too. The key is
+  optional, so the schema version does not change, and older files still
+  load.
+- **`run_windows` moves its files into place all or none** (#503). It
+  replaced the four output files one at a time, so a failed move left a
+  folder with some new files and some old ones. It now uses the same step as
+  `save_data`: each old file is kept until every new one is in place, and a
+  failed move puts the folder back as it was. The old file is kept as a hard
+  link where the file system allows, so a large output is not copied.
 - **Docstrings carry no issue numbers** (#421). Published docstrings, `#:`
   attribute comments and the `tick_size` / `price_decimals` field descriptions
   named GitHub issues or plan labels, which mean nothing to a reader. A new
