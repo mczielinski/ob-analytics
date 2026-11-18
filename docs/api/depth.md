@@ -17,6 +17,8 @@ snapshot's touch always equals the depth summary's at that instant.
 
 ::: ob_analytics.depth.BookLevels
 
+::: ob_analytics.depth.book_levels
+
 ::: ob_analytics.depth.price_level_snapshots
 
 ::: ob_analytics.depth.DepthSummaryEngine

@@ -41,6 +41,7 @@ __all__ = [
     "DepthSummaryEngine",
     "PriceLevelBook",
     "book_imbalance",
+    "book_levels",
     "book_signals",
     "filter_depth",
     "get_spread",
@@ -316,24 +317,42 @@ class BookLevels(NamedTuple):
     bid_volumes: np.ndarray
 
 
-def _book_levels(
+def book_levels(
     events: pd.DataFrame,
     depth: pd.DataFrame,
     num_levels: int,
     *,
     quoted: bool = True,
 ) -> BookLevels:
-    """The best *num_levels* levels of each side after each event.
+    """Return the best *num_levels* levels of each side after each event.
 
     The depth rows are replayed through a :class:`PriceLevelBook`, each with
-    the event it names, the events in the order of *events*; the depth
-    table's own order is kept within one event.  Row ``i`` of the result is
-    the book after ``events.iloc[i]``.
+    the event it names, the events in the order of *events*.  The depth
+    table's own order is kept within one event.
 
-    With *quoted* (the default) each side holds its quoted levels, which
-    leave out the crossed levels at the touch as the depth summary does.
-    Without it, each side holds every level the depth table leaves resting,
-    crossed or not.
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        The run's events, with an ``event_id`` column.  Their order sets the
+        order of the result's rows.
+    depth : pandas.DataFrame
+        The depth table of the same run, as
+        :func:`price_level_volume` returns it.  Each row names its event in
+        ``event_id``.
+    num_levels : int
+        How many levels of each side to return.
+    quoted : bool, default True
+        With ``True``, each side holds its quoted levels, which leave out the
+        crossed levels at the touch, as the depth summary does.  With
+        ``False``, each side holds every level the depth table leaves
+        resting, crossed or not.
+
+    Returns
+    -------
+    BookLevels
+        One row per event: row ``i`` is the book after ``events.iloc[i]``.
+        A side with fewer than *num_levels* levels fills the rest with price
+        0 and volume 0.
 
     Raises
     ------

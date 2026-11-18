@@ -1043,9 +1043,10 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   imports `quality`. The windowed-loader types moved to `protocols`, so the
   Databento loader no longer imports `_windows`. The "no level given" marker
   of the plot functions moved to `_utils`, so plot data no longer imports
-  `pipeline`. `price_level_volume` has a new `warn_overdrawn` option. The
-  LOBSTER loader passes `warn_overdrawn=False`, so it no longer calls a
-  private `depth` function.
+  `pipeline`. `price_level_volume` has a new `warn_overdrawn` option, and
+  the private `depth._book_levels` is now the public `depth.book_levels`, so
+  the LOBSTER loader uses no private `depth` functions. It still imports
+  `depth` and `quality`, as ADR 0001 allows.
   `quality.book_crossing` and `quality.CROSSED_TOLERANCE_PCT` are now in
   `quality.__all__` and on the Data quality API page.
 - **A test checks every layer's imports** (#495). Before, only the engine's

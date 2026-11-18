@@ -20,8 +20,8 @@ from ob_analytics._quality_checks import QualityCheck, Severity
 from ob_analytics._utils import epoch_ns, require_per_order_events, ticks_to_price
 from ob_analytics.depth import (
     BookLevels,
-    _book_levels,
     _price_level_volume,
+    book_levels,
     price_level_volume,
 )
 from ob_analytics.exceptions import ConfigError
@@ -1516,7 +1516,7 @@ def _compare_venue_book(
             f"event names message row {int(rows[outside][0]) + 1}.  Pass the "
             "venue book of the same message file."
         )
-    mine = _book_levels(ordered, rebuilt, num_levels, quoted=False)
+    mine = book_levels(ordered, rebuilt, num_levels, quoted=False)
     venue = BookLevels(*(side[rows] for side in venue_book))
 
     # Per side, which levels of each row differ in price or size.

@@ -48,7 +48,7 @@ from ob_analytics.config import InstrumentGrid, PipelineConfig, SourceSettings
 from ob_analytics.depth import (
     BookLevels,
     DepthSummaryEngine,
-    _book_levels,
+    book_levels,
     price_level_volume,
 )
 from ob_analytics.exceptions import ConfigError
@@ -823,7 +823,7 @@ class LobsterWriter:
         # order of the files, the depth table's own order kept within one
         # event: the order the depth summary replays.
         try:
-            levels = _book_levels(events, depth, num_levels)
+            levels = book_levels(events, depth, num_levels)
         except ConfigError as exc:
             raise ConfigError(f"LobsterWriter: {exc}") from None
 

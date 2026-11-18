@@ -123,7 +123,8 @@ changing, so each is left as a later move:
   uses `quality.book_crossing` and `CROSSED_TOLERANCE_PCT`, so the loader and
   the audit measure a crossed book the same way. It builds the depth table and
   its summary with `depth.price_level_volume` and `DepthSummaryEngine`, and
-  still imports the private `depth._book_levels`.
+  writes the orderbook file's levels with `depth.book_levels`. It uses only
+  public names from both modules.
 - **`synth` → `analytics`.** A generated session comes back with
   `set_order_types` already applied, so it looks like real input after the
   pipeline's classification step.
