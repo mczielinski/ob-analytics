@@ -10,6 +10,7 @@ Install via ``pip install ob-analytics[interactive]``.
 from __future__ import annotations
 
 import html
+import math
 from functools import lru_cache
 from typing import Any
 
@@ -22,6 +23,7 @@ from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     biased_color_norm,
     check_book_payload_level,
+    depth_raster,
     l1_card_texts,
     mpl_marker_area_to_plotly_size,
 )
@@ -216,8 +218,72 @@ def _add_notice(fig: Any, text: str, pal: Palette) -> None:
     )
 
 
+def _add_depth_image(fig: Any, go: Any, depth: pd.DataFrame, col_bias: float) -> None:
+    """Draw the depth levels as one image behind the other traces.
+
+    One image of :func:`~ob_analytics.visualization._data.depth_raster`'s
+    grid, not one marker per row, keeps the page small however many rows
+    the book has.  Colors and transparency follow the matplotlib lines:
+    a cell with no volume is clear, and one under one unit is faint.  An
+    invisible trace carries the colorbar and spans the image, so the axes
+    take in the whole image.
+    """
+    from matplotlib import colormaps
+    from PIL import Image
+
+    raster = depth_raster(depth)
+    if raster is None:
+        return
+    grid = raster["volume"]
+    rows = grid.shape[0]
+    step = raster["price_step"]
+    bottom = raster["price0"] - step / 2
+    top = bottom + rows * step
+    t0, t1 = raster["t0"], raster["t1"]
+
+    # Mirror the matplotlib col_bias norm: colors at the biased positions,
+    # colorbar ticks in real volume units.
+    color_t, colorbar = _biased_color_norm(grid.ravel(), col_bias)
+    rgba = colormaps["viridis"](color_t.reshape(grid.shape), bytes=True)
+    rgba[..., 3] = np.where(np.isnan(grid), 0, np.where(grid < 1, 26, 255))
+    # Image rows run top down; grid row 0 is the lowest price.
+    fig.add_layout_image(
+        source=Image.fromarray(np.ascontiguousarray(rgba[::-1]), "RGBA"),
+        xref="x",
+        yref="y",
+        x=t0,
+        y=top,
+        sizex=(t1 - t0).total_seconds() * 1000,  # a date axis counts milliseconds
+        sizey=top - bottom,
+        xanchor="left",
+        yanchor="top",
+        sizing="stretch",
+        layer="below",
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[t0, t1],
+            y=[bottom, top],
+            mode="markers",
+            marker={
+                "size": 0,
+                "opacity": 0,
+                "color": [0, 1],
+                "colorscale": "Viridis",
+                "cmin": 0,
+                "cmax": 1,
+                "colorbar": colorbar,
+                "showscale": True,
+            },
+            hoverinfo="skip",
+            showlegend=False,
+            name="Depth",
+        )
+    )
+
+
 def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
-    """Render the price-level depth heatmap using Scattergl."""
+    """Render the price-level depth heatmap: the levels as one image."""
     pal = theme.palette
     go = _import_plotly()
     depth = data["depth"]
@@ -230,34 +296,7 @@ def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
     fig = _base_figure(go, theme, title="Price Levels Over Time", notice=notice)
 
     if not depth.empty:
-        vol = depth["volume"].fillna(0)
-        # Mirror the matplotlib col_bias norm: feed normalized color positions
-        # to the colorscale, keep colorbar ticks in real volume units, and let
-        # true volume ride along as customdata so hover still reads true size.
-        color_t, colorbar = _biased_color_norm(depth["volume"].to_numpy(), col_bias)
-
-        fig.add_trace(
-            go.Scattergl(
-                x=depth["timestamp"],
-                y=depth["price"],
-                mode="markers",
-                customdata=vol,
-                marker={
-                    "size": 3,
-                    "color": color_t,
-                    "colorscale": "Viridis",
-                    "cmin": 0,
-                    "cmax": 1,
-                    "colorbar": colorbar,
-                    "opacity": np.where(vol > 0, 0.8, 0.1),
-                },
-                hovertemplate=(
-                    "Time: %{x}<br>Price: %{y:.2f}<br>"
-                    "Volume: %{customdata:.4f}<extra></extra>"
-                ),
-                name="Depth",
-            )
-        )
+        _add_depth_image(fig, go, depth, col_bias)
         fig.update_layout(margin={"l": 60, "r": 90, "t": 50, "b": 50})
 
     if spread is not None and show_mp:
@@ -2078,6 +2117,33 @@ def plotly_volume_percentiles(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -
     return fig
 
 
+def _histogram_edges(
+    values: np.ndarray, bw: float | None, max_bins: int = 1000
+) -> np.ndarray:
+    """Bin edges for *values*: of width *bw*, or the Freedman-Diaconis width.
+
+    The number of bins is capped at *max_bins*, so a heavy tail or a tiny
+    *bw* cannot make millions of bins.
+    """
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.array([0.0, 1.0])
+    lo, hi = float(values.min()), float(values.max())
+    if not hi > lo:
+        return np.array([lo - 0.5, hi + 0.5])
+    if bw is None or not bw > 0:
+        q75, q25 = np.percentile(values, [75, 25])
+        bw = 2 * (q75 - q25) * values.size ** (-1 / 3)
+        sturges = (hi - lo) / (np.log2(values.size) + 1)
+        bw = min(bw, sturges) if bw > 0 else sturges
+    n_bins = min(max_bins, max(1, math.ceil((hi - lo) / bw)))
+    if n_bins == max_bins:
+        return np.linspace(lo, hi, n_bins + 1)
+    start = math.floor(lo / bw) * bw
+    # One edge past the largest value, so rounding cannot leave it out.
+    return start + bw * np.arange(math.floor((hi - start) / bw) + 2)
+
+
 def plotly_events_histogram(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render an events price/volume histogram."""
     pal = theme.palette
@@ -2090,17 +2156,21 @@ def plotly_events_histogram(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> 
         return _base_figure(go, theme, title=f"Events {val} distribution (no data)")
     fig = _base_figure(go, theme, title=f"Events {val} distribution")
 
+    # Binned here, not by plotly.js: a Histogram trace sends every event.
+    edges = _histogram_edges(events[val].to_numpy(dtype=float), bw)
     for direction, color in [("bid", pal.bid), ("ask", pal.ask)]:
         subset = events[events["direction"] == direction]
         if subset.empty:
             continue
+        counts, _ = np.histogram(subset[val].to_numpy(dtype=float), bins=edges)
         fig.add_trace(
-            go.Histogram(
-                x=subset[val],
+            go.Bar(
+                x=(edges[:-1] + edges[1:]) / 2,
+                y=counts,
+                width=np.diff(edges),
                 name=direction.capitalize(),
                 marker_color=color,
                 opacity=0.7,
-                xbins={"size": bw} if bw is not None else None,
             )
         )
 

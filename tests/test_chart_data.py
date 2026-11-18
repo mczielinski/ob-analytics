@@ -277,7 +277,7 @@ class TestPrepareOrderActivityL3:
 class TestPrepareLiquidityAtTouch:
     def test_returns_paired_series(self, plot_depth_summary: pd.DataFrame) -> None:
         data = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
-        assert set(data) == {"rug", "timestamp", "bid_vol", "ask_vol"}
+        assert set(data) == {"rug", "timestamp", "bid_vol", "ask_vol", "thinned"}
         assert len(data["timestamp"]) == len(plot_depth_summary)
         assert len(data["bid_vol"]) == len(data["ask_vol"]) == len(data["timestamp"])
 

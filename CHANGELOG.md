@@ -1503,6 +1503,23 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **The Plotly gallery of the bundled sample is 28 MiB, not 231 MiB** (#491).
+  Each line carried every row of `depth_summary`, so `book_signals.html`
+  alone was 82 MiB. The data functions now thin a long series to 1,000 time
+  steps. Each step keeps its first, last, lowest and highest value, so every
+  spike is still drawn. Matplotlib gets the same rows. Pass `time_bins=None`
+  to a `prepare` function to keep every row.
+  - The Plotly depth heatmap draws its levels as one image, not one marker
+    per row (32 MiB to 0.3 MiB). Its cells no longer show the volume on
+    hover.
+  - The L2 order event map keeps one event per spot of the screen, the
+    largest (19 MiB to 3 MiB). The liquidity rug keeps one tick per time
+    step. The Plotly events histogram sends counts, not every event.
+  - A gallery card says when its plot shows thinned data, and how many rows
+    it shows.
+  - A test builds the Plotly gallery of the sample and fails when a page is
+    larger than its size budget.
+
 - **Every loader refuses an order price between two ticks** (#500). Only the
   price-level CSV loader checked prices. The Bitstamp, LOBSTER and Databento
   loaders rounded a price to the nearest tick and gave no warning, so on the
