@@ -77,8 +77,8 @@ def trade_tape(
     ``end_time``.  Draws the trade price as a step line.
 
     L3: ``events`` and ``trades``, and optionally ``spread``,
-    ``volume_scale``, ``start_time``, ``end_time``, ``price_from``,
-    ``price_to`` and ``density_threshold``.  Draws each trade at the end of a
+    ``start_time``, ``end_time``, ``price_from``, ``price_to`` and
+    ``density_threshold``.  Draws each trade at the end of a
     bar that shows how long the maker order had rested.
     """
     faces = {
@@ -94,11 +94,11 @@ def order_activity(
     """Prepare the order activity map.  ``level`` is required.
 
     L2: ``events``, and optionally ``start_time``, ``end_time``,
-    ``price_from``, ``price_to``, ``volume_from``, ``volume_to`` and
-    ``volume_scale``.  Draws created and deleted events at their price.
+    ``price_from``, ``price_to``, ``volume_from`` and ``volume_to``.
+    Draws created and deleted events at their price.
 
-    L3: ``events``, and optionally ``volume_scale``, ``start_time``,
-    ``end_time``, ``price_from``, ``price_to``, ``max_spans``,
+    L3: ``events``, and optionally ``start_time``, ``end_time``,
+    ``price_from``, ``price_to``, ``max_spans``,
     ``marker_threshold`` and the three frames of
     :func:`hidden_liquidity_overlay`.  Draws each order as one span from
     placement to its end.
@@ -117,11 +117,11 @@ def cancellations(
 
     L2: ``events``, and optionally ``action``, ``event_type``,
     ``start_time``, ``end_time``, ``price_from``, ``price_to``,
-    ``volume_from``, ``volume_to``, ``volume_scale`` and ``log_scale``.
+    ``volume_from``, ``volume_to`` and ``log_scale``.
     Draws the cancelled volume at each price through time.
 
-    L3: ``events``, and optionally ``volume_scale``, ``start_time``,
-    ``end_time``, ``age_floor_s``, ``distance_floor_bps`` and
+    L3: ``events``, and optionally ``start_time``, ``end_time``,
+    ``age_floor_s``, ``distance_floor_bps`` and
     ``distance_cap_bps``.  Draws each cancellation by how long the order
     rested and how far from the touch it sat.
     """
@@ -137,8 +137,8 @@ def liquidity_at_touch(
 ) -> dict[str, Any]:
     """Prepare the liquidity at the touch.  ``level`` is required.
 
-    L2: ``depth_summary``, and optionally ``volume_scale``, ``start_time``,
-    ``end_time`` and ``events``.  Draws the resting size at the best bid and
+    L2: ``depth_summary``, and optionally ``start_time``, ``end_time`` and
+    ``events``.  Draws the resting size at the best bid and
     ask, with a strip of the events beneath.
 
     L3: ``events``, and optionally ``side``, ``n_time``, ``start_time`` and

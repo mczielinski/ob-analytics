@@ -1708,7 +1708,6 @@ def mpl_volume_percentiles(
     legend_entries = data["legend_entries"]
     max_ask = data["max_ask"]
     max_bid = data["max_bid"]
-    volume_scale = data["volume_scale"]
     perc_line = data["perc_line"]
     side_line = data["side_line"]
 
@@ -1753,7 +1752,7 @@ def mpl_volume_percentiles(
     if side_line:
         ax.axhline(y=0, color=pal.rule, linewidth=0.6)
 
-    y_range = volume_scale * max(max_ask, max_bid)
+    y_range = max(max_ask, max_bid)
     ax.set_ylim(-y_range, y_range)
     ax.set_xlabel("time")
     ax.set_ylabel("cumulative volume  (bid ↓ / ask ↑)")

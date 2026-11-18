@@ -8,7 +8,6 @@ from ob_analytics.visualization import prepare
 from ob_analytics.visualization._data import (
     _default_start_end,
     _price_axis_breaks,
-    infer_volume_scale,
     normalized_marker_areas,
 )
 
@@ -29,40 +28,6 @@ class TestDefaultStartEnd:
         start, end = _default_start_end(plot_trades, explicit_start, explicit_end)
         assert start == explicit_start
         assert end == explicit_end
-
-
-class TestInferVolumeScale:
-    def test_already_in_target_range_returns_one(self) -> None:
-        assert infer_volume_scale(np.array([1.0, 2.0, 3.0, 5.0])) == 1.0
-
-    def test_satoshi_scale_volumes(self) -> None:
-        # Bitstamp-style volumes (≈1e8 satoshis): scale should bring
-        # the median into [0.1, 100).
-        scale = infer_volume_scale(np.array([1e8, 2e8, 5e8]))
-        scaled_median = float(np.median(np.array([1e8, 2e8, 5e8]) * scale))
-        assert 0.1 <= scaled_median < 100
-        assert scale == 1e-8
-
-    def test_fractional_volumes_scaled_up(self) -> None:
-        scale = infer_volume_scale(np.array([1e-4, 5e-4, 9e-4]))
-        scaled_median = float(np.median(np.array([1e-4, 5e-4, 9e-4]) * scale))
-        assert 0.1 <= scaled_median < 100
-        assert scale == 1e4
-
-    def test_empty_input_returns_one(self) -> None:
-        assert infer_volume_scale(np.array([])) == 1.0
-
-    def test_nonpositive_median_returns_one(self) -> None:
-        assert infer_volume_scale(np.array([0.0, 0.0, 0.0, 1.0])) == 1.0
-
-    def test_nan_handled(self) -> None:
-        # nanmedian ignores NaNs.
-        scale = infer_volume_scale(np.array([np.nan, 100.0, 100.0]))
-        assert scale == 0.01
-
-    def test_accepts_pandas_series(self) -> None:
-        s = pd.Series([1e6, 2e6, 3e6])
-        assert infer_volume_scale(s) == 1e-6
 
 
 class TestNormalizedMarkerAreas:
@@ -185,7 +150,7 @@ class TestPrepareCancellationsL3:
         self, sample_cancellation_events: pd.DataFrame
     ) -> None:
         data = prepare.cancellations(sample_cancellation_events, level="L3")
-        assert set(data) == {"bids", "asks", "volume_scale"}
+        assert set(data) == {"bids", "asks"}
         for side in (data["bids"], data["asks"]):
             assert isinstance(side, pd.DataFrame)
             assert {"age_s", "distance_from_touch"} <= set(side.columns)
@@ -224,7 +189,6 @@ class TestPrepareOrderActivityL3:
             "filled",
             "cancelled",
             "resting",
-            "volume_scale",
             "price_by",
             "y_range",
             "shown_of",
@@ -313,7 +277,7 @@ class TestPrepareOrderActivityL3:
 class TestPrepareLiquidityAtTouch:
     def test_returns_paired_series(self, plot_depth_summary: pd.DataFrame) -> None:
         data = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
-        assert set(data) == {"rug", "timestamp", "bid_vol", "ask_vol", "volume_scale"}
+        assert set(data) == {"rug", "timestamp", "bid_vol", "ask_vol"}
         assert len(data["timestamp"]) == len(plot_depth_summary)
         assert len(data["bid_vol"]) == len(data["ask_vol"]) == len(data["timestamp"])
 
@@ -335,15 +299,16 @@ class TestPrepareLiquidityAtTouch:
         # No fill column in the fixture -> nothing in the filled row.
         assert len(rug["filled"]) == 0
 
-    def test_scales_volume(self, plot_depth_summary: pd.DataFrame) -> None:
-        raw = prepare.liquidity_at_touch(
-            plot_depth_summary, volume_scale=1.0, level="L2"
+    def test_sizes_are_the_summary_sizes(
+        self, plot_depth_summary: pd.DataFrame
+    ) -> None:
+        # Issue #487: the series is drawn in the instrument's units, unscaled.
+        data = prepare.liquidity_at_touch(plot_depth_summary, level="L2")
+        assert np.array_equal(
+            data["bid_vol"].to_numpy(), plot_depth_summary["best_bid_vol"].to_numpy()
         )
-        scaled = prepare.liquidity_at_touch(
-            plot_depth_summary, volume_scale=2.0, level="L2"
-        )
-        assert np.allclose(
-            scaled["bid_vol"].to_numpy(), raw["bid_vol"].to_numpy() * 2.0
+        assert np.array_equal(
+            data["ask_vol"].to_numpy(), plot_depth_summary["best_ask_vol"].to_numpy()
         )
 
     def test_window_filters_by_time(self, plot_depth_summary: pd.DataFrame) -> None:
@@ -360,7 +325,7 @@ class TestPrepareOrderOutcomeL3:
     ) -> None:
         events, _trades = sample_executed_orders
         data = prepare.order_outcome(events, bps_quantiles=(0.0, 1.0))
-        assert set(data) == {"filled", "partial", "cancelled", "volume_scale"}
+        assert set(data) == {"filled", "partial", "cancelled"}
         for frame in (data["filled"], data["partial"], data["cancelled"]):
             assert {"distance_bps", "placed", "marker_area"} <= set(frame.columns)
 
@@ -451,7 +416,6 @@ class TestPrepareTradeTapeL3:
             "lolli_sells",
             "mid_line",
             "dense",
-            "volume_scale",
             "y_range",
         }
         for side in (data["buys"], data["sells"]):
@@ -506,10 +470,12 @@ class TestPrepareBookSnapshot:
                 side.columns
             )
 
-    def test_volume_scale_applied(self, plot_order_book: dict) -> None:
-        data = prepare.book_snapshot(plot_order_book, volume_scale=0.5, level="L2")
-        # Cumulative liquidity is scaled: ask cumsum 400 * 0.5 == 200.
-        assert data["asks"]["liquidity"].max() <= 200
+    def test_sizes_are_not_rescaled(self, plot_order_book: dict) -> None:
+        # Issue #487: the bars carry the book's own sizes, with no hidden factor.
+        data = prepare.book_snapshot(plot_order_book, level="L2")
+        assert data["asks"]["volume"].tolist() == [150, 250]
+        assert data["asks"]["liquidity"].tolist() == [150, 400]
+        assert "volume_scale" not in data
 
     def test_aggregate_zeroes_segment_floor(self, plot_order_book: dict) -> None:
         # L2 bars sit on the axis: each level is one segment from 0.
@@ -524,7 +490,7 @@ class TestPrepareBookSnapshot:
             "bids": np.array([[236.0, 100, 100], [236.0, 50, 150]]),
             "asks": np.empty((0, 3)),
         }
-        data = prepare.book_snapshot(book, level="L3", volume_scale=1.0)
+        data = prepare.book_snapshot(book, level="L3")
         bids = data["bids"]
         assert data["per_order"] is True
         assert len(bids) == 2
@@ -850,7 +816,7 @@ class TestPrepareTradeSize:
 
     def test_splits_by_side_and_drops_nonpositive(self) -> None:
         data = prepare.trade_size(self._trades())
-        assert set(data) >= {"buys", "sells", "volume_scale"}
+        assert set(data) >= {"buys", "sells"}
         # buys: the two positive-size buys; the zero-volume sell is dropped.
         assert len(data["buys"]) == 2
         assert len(data["sells"]) == 1
