@@ -75,6 +75,7 @@ from ob_analytics.bars import (
 # Importing the source modules fires their register_source(...) self-registration
 # at import time; the Source classes are also the public per-venue entry points.
 from ob_analytics.bitstamp import BitstampSource
+from ob_analytics.book import order_book, order_lifecycles
 from ob_analytics.config import (
     Credential,
     InstrumentGrid,
@@ -181,6 +182,7 @@ from ob_analytics.quality import (
     detect_sequence_gaps,
     detect_stale_orders,
 )
+from ob_analytics.queue import queue_positions
 from ob_analytics.schemas import (
     SYMBOL_COLUMN,
     VENUE_COLUMN,
@@ -322,6 +324,9 @@ __all__ = [
     "load_source_plugins",
     "load_writer_plugins",
     "match_toy_orders",
+    "order_book",
+    "order_lifecycles",
+    "queue_positions",
     "register_bar_rule",
     "register_feature",
     "register_metric",

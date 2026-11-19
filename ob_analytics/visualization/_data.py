@@ -1312,6 +1312,15 @@ def prepare_order_activity_l2_data(
     }
 
 
+def _lifecycles_of(
+    events: pd.DataFrame, lifecycles: pd.DataFrame | None
+) -> pd.DataFrame:
+    """*lifecycles* when the caller has them, else ``order_lifecycles(events)``."""
+    from ob_analytics.book import order_lifecycles
+
+    return lifecycles if lifecycles is not None else order_lifecycles(events)
+
+
 def prepare_order_activity_l3_data(
     events: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
@@ -1323,6 +1332,8 @@ def prepare_order_activity_l3_data(
     iceberg_lines: pd.DataFrame | None = None,
     iceberg_refills: pd.DataFrame | None = None,
     hidden_trades: pd.DataFrame | None = None,
+    *,
+    lifecycles: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Per-order lifecycle Gantt: each order one span place -> outcome, by fate.
 
@@ -1359,12 +1370,13 @@ def prepare_order_activity_l3_data(
     ``iceberg_chains`` holds the lines one chain per iceberg
     (:func:`iceberg_chains`), and ``price_ticks`` the price axis ticks
     (:func:`rounded_price_ticks`).
-    """
-    from ob_analytics.book import order_lifecycles
 
+    *lifecycles* is ``order_lifecycles(events)`` when the caller already has
+    it; ``None`` (the default) builds it here.
+    """
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
-    life = order_lifecycles(events)
+    life = _lifecycles_of(events, lifecycles)
     life = life[life["type"].isin(["cancelled-limit", "resting-limit"])]
 
     # Lifecycles overlapping the window, clipped to it for display.
@@ -1451,6 +1463,8 @@ def prepare_queue_position_data(
     marker_threshold: int = 400,
     level: Level | str | None = _UNSET,
     time_bins: int | None = SERIES_BINS,
+    queue: pd.DataFrame | None = None,
+    lifecycles: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """L3 (MBO) queue position: each touch order's FIFO rank over time, by fate.
 
@@ -1472,13 +1486,16 @@ def prepare_queue_position_data(
     With *time_bins*, each order's line is thinned to its lowest, highest
     and last rank in each of that many time steps (:func:`thin_order_lines`); ``None``
     keeps every row.  The payload's ``thinned`` says how many rows were kept.
+
+    *queue* is ``queue_positions(events, levels="touch")`` and *lifecycles*
+    is ``order_lifecycles(events)``, when the caller already has them;
+    ``None`` (the default) builds each here.
     """
     resolve_level("queue_position", level)
-    from ob_analytics.book import order_lifecycles
     from ob_analytics.queue import queue_positions
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
-    q = queue_positions(events, levels="touch")
+    q = queue if queue is not None else queue_positions(events, levels="touch")
     q = q[(q["timestamp"] >= start_time) & (q["timestamp"] <= end_time)]
 
     fate_map = {
@@ -1487,7 +1504,7 @@ def prepare_queue_position_data(
         "cancelled": "cancelled",
         "resting": "resting",
     }
-    life = order_lifecycles(events)[["id", "outcome"]]
+    life = _lifecycles_of(events, lifecycles)[["id", "outcome"]]
     q = q.merge(life, on="id", how="left")
     q["fate"] = q["outcome"].map(fate_map).fillna("resting")
     # Time order, so each order's rows already run along its trajectory.
@@ -1941,6 +1958,7 @@ def prepare_order_outcome_data(
     *,
     level: Level | str | None = _UNSET,
     bins: int | None = SERIES_BINS,
+    lifecycles: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """L3 (MBO) order outcome: each limit order as outcome vs placement.
 
@@ -1975,13 +1993,14 @@ def prepare_order_outcome_data(
     rows, and each spot keeps only its largest order of each outcome
     (:func:`thin_points`); ``None`` keeps every order.  The payload's
     ``thinned`` says how many orders were kept.
+
+    *lifecycles* is ``order_lifecycles(events)`` when the caller already has
+    it; ``None`` (the default) builds it here.
     """
     resolve_level("order_outcome", level)
-    from ob_analytics.book import order_lifecycles
-
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
-    life = order_lifecycles(events)
+    life = _lifecycles_of(events, lifecycles)
     created = life[
         (life["placed_ts"] >= start_time) & (life["placed_ts"] <= end_time)
     ].rename(
@@ -2130,6 +2149,8 @@ def prepare_cancellations_l3_data(
     distance_floor_bps: float = 0.05,
     distance_cap_bps: float = 1_000.0,
     bins: int = 30,
+    *,
+    lifecycles: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Per-order cancellations: each cancelled order as one age x distance point.
 
@@ -2154,11 +2175,16 @@ def prepare_cancellations_l3_data(
     placements on-scale (log cannot show zero).  *distance_cap_bps* drops only
     the degenerate aggressiveness values (orders priced against a near-empty
     opposite best, which blow up to absurd bps) -- not real resting depth.
+
+    *lifecycles* is ``order_lifecycles(events)`` when the caller already has
+    it; ``None`` (the default) builds it here.
     """
     from ob_analytics.analytics import cancelled_orders
 
     start_time, end_time = _default_start_end(events, start_time, end_time)
-    cancels = cancelled_orders(events).dropna(subset=["distance_bps"])
+    cancels = cancelled_orders(events, lifecycles=lifecycles).dropna(
+        subset=["distance_bps"]
+    )
     cancels = cancels[
         (cancels["timestamp"] >= start_time)
         & (cancels["timestamp"] <= end_time)

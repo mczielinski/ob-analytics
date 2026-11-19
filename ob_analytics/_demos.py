@@ -20,9 +20,9 @@ from ob_analytics.lobster import LobsterLoader, LobsterSource
 from ob_analytics.pipeline import Pipeline, PipelineResult
 from ob_analytics.visualization.gallery import (
     PlotSpec,
+    _display,
     bars_card,
     build_gallery_model,
-    display_result,
     generate_gallery,
     trading_halts_card,
 )
@@ -53,7 +53,7 @@ def _save_and_gallery(
     logger.info("Parquet saved to: {}", parquet_dir)
 
     cards = list(analytics or [])
-    cards.extend(_bars_cards(display_result(result).trades))
+    cards.extend(_bars_cards(_display(result).trades))
 
     model = None
     if cards:
@@ -98,7 +98,7 @@ def _lobster_analytics_cards(
     """
     cards: list[PlotSpec] = []
     if halts is not None and not halts.empty:
-        display_trades = display_result(result).trades
+        display_trades = _display(result).trades
         cards.append(trading_halts_card(display_trades, halts))
     return cards
 

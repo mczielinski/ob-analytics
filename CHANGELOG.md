@@ -1110,6 +1110,21 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   files. Polars is not a dependency and is not installed; `to_polars()` raises
   `ImportError` with an install hint when it is missing, and Polars keeps no
   schema metadata, so the version and tick size do not survive that conversion.
+- **The result keeps the tables built from it** (#498). New accessors on
+  `PipelineResult`: `result.lifecycles()`, `result.queue(levels=...)`,
+  `result.book(at, ...)`, `result.bars(...)` and `result.features(...)`. Each
+  builds its table on the first call and returns the same table on a later
+  call with the same settings. `result.book` keeps one snapshot per instant
+  and settings. The display-unit tables and the gallery's view of the run are
+  kept the same way, so a second `result.plot(...)`, `plot_result(...)` or
+  `build_gallery_model(...)` on one result does not convert the tables or find
+  the busiest window again. One gallery now builds the order lifecycles once
+  (it built them four times) and the queue once. `save_data(result, path,
+  extra_tables=["lifecycles", "queue"])` saves the two per-order tables beside
+  the four core tables, and `load_result` reads them back, so the accessors of
+  the loaded result do not build them again. `cancelled_orders` and the
+  per-order `prepare` functions take an optional `lifecycles=` (and the queue
+  face `queue=`) so they can reuse a table you already have.
 - **The frame-type contract is written down** in
   [Frame types: pandas in, pandas out](https://mczielinski.github.io/ob-analytics/schema/#frame-types-pandas-in-pandas-out):
   public functions take and return pandas, plug-ins are handed pandas, and the
@@ -1563,6 +1578,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   taken per column as the first non-null among an order's `created` rows. The
   lifecycle table is now covered by `tests/test_golden_synth.py`, which it was
   not before.
+
+- **`order_book`, `order_lifecycles` and `queue_positions` are exported from
+  the package root** (#498): `from ob_analytics import order_book,
+  order_lifecycles, queue_positions`. This reverses part of #414, which left
+  them in `ob_analytics.book` and `ob_analytics.queue` only. They are still
+  there too.
 
 - **`BitstampTradeReader` no longer requires integer order ids.** It keyed its
   maker/taker lookup on `int(order_id)`, which crashed on a public trade tape

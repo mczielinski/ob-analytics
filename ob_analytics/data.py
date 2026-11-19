@@ -564,6 +564,7 @@ def save_data(
     writer: DataWriter | None = None,
     config: Any = None,
     ctx: Any = None,
+    extra_tables: Iterable[str] = (),
     **write_kwargs: Any,
 ) -> None:
     """Save pipeline data to disk.
@@ -601,6 +602,17 @@ def save_data(
         keep the run's tick size, lot size and display precision.
         ``ctx`` defaults to an empty
         :class:`~ob_analytics.protocols.RunContext`.
+    extra_tables : str or iterable of str
+        Per-order tables of a result to save beside its four tables:
+        ``"lifecycles"``
+        (:meth:`~ob_analytics.pipeline.PipelineResult.lifecycles`) and
+        ``"queue"`` (:meth:`~ob_analytics.pipeline.PipelineResult.queue` at
+        the touch).  The default saves neither.  The ``"parquet"`` format
+        writes them; other formats leave them out.  :func:`load_result`
+        reads them back, so the accessors of the loaded result do not build
+        them again.  When a result is saved to a folder, a per-order table left
+        there by an earlier save and not saved this time is removed, so it
+        cannot be read back with the wrong run.
     **write_kwargs
         Extra keyword arguments forwarded to ``writer.write()``.
 
@@ -611,24 +623,47 @@ def save_data(
     ConfigError
         If *path* is a file where the writer takes a folder, or a folder
         where it takes a file.  The message says which the writer expected.
-        Also if the writer declares no ``target``.
+        Also if the writer declares no ``target``, if *extra_tables* names a
+        table other than ``"lifecycles"`` and ``"queue"``, or if it is given
+        with tables that are not a result.
     """
-    from ob_analytics.pipeline import PipelineResult
+    from ob_analytics.pipeline import _SAVABLE_TABLES, PipelineResult
 
     p = Path(path)
     declarations = None
     level = None
+    # One name on its own is one table, not its letters.
+    names = [extra_tables] if isinstance(extra_tables, str) else extra_tables
+    extra = list(dict.fromkeys(names))
+    unknown = [name for name in extra if name not in _SAVABLE_TABLES]
+    if unknown:
+        raise ConfigError(
+            f"save_data cannot save {', '.join(map(repr, unknown))}; "
+            f"extra_tables takes {', '.join(map(repr, _SAVABLE_TABLES))}."
+        )
+    result = None
     if isinstance(data, PipelineResult):
+        result = data
         if config is None:
-            config = data.config
-        declarations = data.declarations
-        level = data.level
-        data = data.tables()
+            config = result.config
+        declarations = result.declarations
+        level = result.level
+        frames = {
+            **result.tables(),
+            **{name: getattr(result, name)() for name in extra},
+        }
+    elif extra:
+        raise ConfigError(
+            "extra_tables needs a PipelineResult: the per-order tables are "
+            "built from a result's events."
+        )
+    else:
+        frames = data
     # Every writer is handed the same payload: a mapping of pandas frames that
     # can also produce canonical Arrow (#216).  It is a dict, so a writer that
     # ignores the extra sees exactly what it saw before.
     tables = OutputTables(
-        data,
+        frames,
         tick_sizes=tick_sizes_from_config(config),
         lot_sizes=lot_sizes_from_config(config),
         config=config if isinstance(config, PipelineConfig) else None,
@@ -643,6 +678,9 @@ def save_data(
         label = type(writer).__name__
     _check_target(p, writer, label)
     writer.write(tables, p, **write_kwargs)
+    if result is not None and WriteTarget(writer.target) is WriteTarget.FOLDER:
+        for name in _SAVABLE_TABLES.keys() - set(extra):
+            (p / f"{name}.parquet").unlink(missing_ok=True)
 
 
 #: Suffixes that mark a path as a file, so a folder format refuses it before it
@@ -723,6 +761,12 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     tables' ``attrs``, so :meth:`~ob_analytics.pipeline.PipelineResult.audit`
     makes the same checks as on the run itself.
 
+    The per-order tables saved with ``save_data(..., extra_tables=...)``
+    come back too:
+    :meth:`~ob_analytics.pipeline.PipelineResult.lifecycles` and
+    :meth:`~ob_analytics.pipeline.PipelineResult.queue` (at the touch)
+    return them without building them again.
+
     The run's declarations (:attr:`PipelineResult.declarations`) come back
     too.  A folder written by an older version does not record them; it gets
     those of the capture record ``ob-analytics process`` keeps beside the
@@ -753,7 +797,7 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     FileNotFoundError
         If the folder holds no Parquet file at all.
     """
-    from ob_analytics.pipeline import PipelineResult
+    from ob_analytics.pipeline import _SAVABLE_TABLES, PipelineResult
 
     p = Path(path)
     data = load_data(p)
@@ -763,7 +807,7 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
             f"{p} is not a saved run: it has no {', '.join(missing)} table. "
             f"A saved run holds {', '.join(_RESULT_TABLES)}."
         )
-    return PipelineResult(
+    result = PipelineResult(
         events=data["events"],
         trades=data["trades"],
         depth=data["depth"],
@@ -772,6 +816,10 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
         level=_saved_level(p, data),
         declarations=_saved_declarations(p, source),
     )
+    for name, key in _SAVABLE_TABLES.items():
+        if name in data:
+            result._keep(key, lambda table=data[name]: table)
+    return result
 
 
 def _recorded(path: Path, key: bytes) -> tuple[Path, bytes] | None:

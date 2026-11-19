@@ -290,7 +290,9 @@ def maker_resting_times(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFr
     return rested
 
 
-def cancelled_orders(events: pd.DataFrame) -> pd.DataFrame:
+def cancelled_orders(
+    events: pd.DataFrame, *, lifecycles: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Return each cancelled order's age and distance from the touch.
 
     A cancelled order here is a *cancelled-limit* order (see
@@ -304,6 +306,10 @@ def cancelled_orders(events: pd.DataFrame) -> pd.DataFrame:
         Events with the columns :func:`~ob_analytics.book.order_lifecycles`
         needs, the ``type`` column of :func:`set_order_types` and the
         ``aggressiveness_bps`` column of :func:`order_aggressiveness`.
+    lifecycles : pandas.DataFrame, optional
+        ``order_lifecycles(events)``, when you already have it (for example
+        from :meth:`~ob_analytics.pipeline.PipelineResult.lifecycles`).
+        ``None`` (the default) builds it from *events*.
 
     Returns
     -------
@@ -325,7 +331,8 @@ def cancelled_orders(events: pd.DataFrame) -> pd.DataFrame:
         and *events* carries no ``tick_size`` or ``lot_size``.
     """
     validate_columns(events, {"type", "aggressiveness_bps"}, "cancelled_orders")
-    lifecycles = order_lifecycles(events)
+    if lifecycles is None:
+        lifecycles = order_lifecycles(events)
     cancelled = lifecycles[
         (lifecycles["type"] == "cancelled-limit")
         & (lifecycles["outcome"] == "cancelled")
