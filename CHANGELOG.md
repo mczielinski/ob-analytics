@@ -1386,6 +1386,40 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   now fails a test instead of failing when its backend is imported. Plug-in
   plots and backends still register with `RENDERERS.register`; nothing
   changes for them.
+- **Renderers only draw what the payload holds** (#501). Each number a
+  renderer used to work out is now in the face's payload, built once in
+  `visualization/_data.py`, so the matplotlib, Plotly and Bokeh pictures of
+  one payload agree. A test checks that every backend of a face reads the
+  same payload keys.
+  - Depth heatmap: `color_limits` (the volume range of the colours, used by
+    every backend) and `price_ticks` (from `price_by`, now drawn by Plotly
+    and Bokeh too).
+  - Order activity: `price_ticks` at both levels, now drawn by Plotly too.
+    At L2 each change has a `marker_area`, one size rule for every backend;
+    Plotly sized dots from the raw volume, so its dots changed size.
+  - Cancellations: both backends draw one grid of counts (`age_edges`,
+    `distance_edges`, `bid_counts`, `ask_counts`, `counts`,
+    `count_range`), 30 by 30 cells on log axes, set by the new `bins`
+    argument. Matplotlib drew hexagons; it now draws the same square cells
+    as Plotly.
+  - Events histogram: both backends draw the payload's `edges`,
+    `bid_counts` and `ask_counts`. Matplotlib's bins changed to the ones
+    Plotly drew.
+  - Kyle's lambda: the fitted line is the payload's `fit_line`.
+  - Book snapshot: `bar_thickness`, which Plotly now uses too. Book replay:
+    `size_max`.
+  - Queue position: `ends`, the last row of each filled and each cancelled
+    order. Plotly now draws the end
+    marks and the rank range (`show_markers`, `max_rank`), as matplotlib
+    does.
+  - Order activity at L3: Plotly now draws the end marks (`show_markers`).
+  - Volume percentiles: Plotly now draws the band edges only when
+    `perc_line` is on.
+  - Bars: `volume_top`, the top of the volume axis.
+  - Iceberg overlay: `iceberg_chains`, one chain per iceberg with its side
+    and opacity.
+  - Liquidity at the touch: Plotly draws the event rug at fixed heights at
+    the bottom of the chart, as matplotlib does, not below zero.
 - **The capture directory layout** (#150). A capture's files are now in
   `seg-0001/`, `seg-0002/`, ... under `--out`, next to `manifest.json`. Read
   one segment as before, from its `orders.csv` or `depth.csv`; give `process`
