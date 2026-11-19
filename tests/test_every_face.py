@@ -401,3 +401,67 @@ def test_face_draws_inside_the_data(faces: Faces, coordinate: Coordinate) -> Non
                 f"{axis.title!r} axis draws up to {drawn_max}; "
                 f"the largest size given is {sizes}"
             )
+
+
+# ── Every backend reads the same payload ──────────────────────────────
+
+
+class _ReadLog(dict[str, Any]):
+    """A payload that records each key a renderer reads from it."""
+
+    def __init__(self, payload: Mapping[str, Any]) -> None:
+        super().__init__(payload)
+        self.read: set[str] = set()
+
+    def __getitem__(self, key: Any, /) -> Any:
+        self.read.add(str(key))
+        return super().__getitem__(key)
+
+    def get(self, key: Any, default: Any = None, /) -> Any:
+        self.read.add(str(key))
+        return super().get(key, default)
+
+    def __contains__(self, key: object, /) -> bool:
+        self.read.add(str(key))
+        return super().__contains__(key)
+
+
+def _faces_on_backends() -> list[Any]:
+    """Each face drawn by more than one backend, with its backends."""
+    backends: dict[tuple[str, Level | None], list[str]] = {}
+    for key, level, backend in _concepts.PLOTS:
+        backends.setdefault((key, level), []).append(backend)
+    return [
+        pytest.param(key, level, names, id=f"{key}-{level.value if level else 'none'}")
+        for (key, level), names in backends.items()
+        if len(names) > 1
+    ]
+
+
+@pytest.mark.parametrize(("key", "level", "backends"), _faces_on_backends())
+def test_backends_read_the_same_payload(
+    faces: Faces, key: str, level: Level | None, backends: list[str]
+) -> None:
+    # A renderer only draws what the payload holds (ARCHITECTURE.md).  When
+    # one backend reads a key another ignores, the two draw different
+    # pictures from one payload, or one computes what the other is given.
+    import importlib.util
+
+    import matplotlib.pyplot as plt
+
+    from ob_analytics.visualization._renderers import RENDERERS, _load_backend
+
+    # Compare the backends that are installed; skip only when fewer than two.
+    backends = [b for b in backends if b == "matplotlib" or importlib.util.find_spec(b)]
+    if len(backends) < 2:
+        pytest.skip(f"{key} at {level}: fewer than two backends installed")
+    read: dict[str, set[str]] = {}
+    for backend in backends:
+        _load_backend(backend)
+        payload = _ReadLog(faces.payload(key, level))
+        RENDERERS.get((key, level, backend))(payload)
+        plt.close("all")
+        read[backend] = payload.read
+    every = set().union(*read.values())
+    missing = {b: sorted(every - keys) for b, keys in read.items() if every - keys}
+    assert not missing, f"{key} at {level}: keys a backend does not read: {missing}"

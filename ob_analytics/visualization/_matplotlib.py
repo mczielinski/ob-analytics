@@ -35,11 +35,10 @@ from ob_analytics.protocols import Level
 from ob_analytics.visualization import _renderers
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
-    book_bar_thickness,
     check_book_payload_level,
     l1_card_texts,
 )
-from ob_analytics.visualization._palette import Palette, iceberg_opacity
+from ob_analytics.visualization._palette import Palette
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 L2, L3 = Level.L2, Level.L3
@@ -267,8 +266,10 @@ def mpl_trade_tape_aggregate(
     return fig
 
 
-def _volume_norm(volume: pd.Series, col_bias: float) -> mcolors.Normalize:
-    """Color normalization for the depth heatmap.
+def _volume_norm(
+    limits: tuple[float, float] | None, col_bias: float
+) -> mcolors.Normalize:
+    """The depth heatmap's colour scale between the payload's *limits*.
 
     ``col_bias`` is the gamma of a power-law norm: ``1.0`` is linear so
     high-volume walls stand out against a dark field, ``0 < col_bias < 1``
@@ -276,11 +277,8 @@ def _volume_norm(volume: pd.Series, col_bias: float) -> mcolors.Normalize:
     matches the R package's palette bias), and ``col_bias <= 0`` selects a
     log10 scale.
     """
-    vmin = volume.min()
-    vmax = volume.max()
+    vmin, vmax = limits if limits is not None else (None, None)
     if col_bias <= 0:
-        if vmin <= 0:
-            vmin = volume[volume > 0].min()
         return mcolors.LogNorm(vmin=vmin, vmax=vmax)
     if col_bias != 1:
         return mcolors.PowerNorm(gamma=col_bias, vmin=vmin, vmax=vmax)
@@ -297,7 +295,7 @@ _HIDDEN_TRADE_LABEL = "Hidden-order trade"
 
 def _draw_iceberg_overlay(
     ax: Axes,
-    lines: pd.DataFrame | None,
+    chains: list[dict[str, Any]],
     refills: pd.DataFrame | None,
     pal: Palette,
 ) -> bool:
@@ -306,19 +304,16 @@ def _draw_iceberg_overlay(
     Returns whether anything was drawn, so callers can add a legend entry.
     """
     drew = False
-    if lines is not None and not lines.empty:
-        for _, g in lines.groupby("iceberg", sort=False):
-            color = pal.bid if g["direction"].iloc[0] == "bid" else pal.ask
-            alpha = iceberg_opacity(g["confidence"].iloc[0])
-            ax.plot(
-                mdates.date2num(g["timestamp"]),
-                g["price"],
-                color=color,
-                alpha=alpha,
-                linewidth=1.2,
-                zorder=4,
-            )
-            drew = True
+    for chain in chains:
+        ax.plot(
+            mdates.date2num(chain["timestamp"]),
+            chain["price"],
+            color=pal.bid if chain["direction"] == "bid" else pal.ask,
+            alpha=chain["opacity"],
+            linewidth=1.2,
+            zorder=4,
+        )
+        drew = True
     if refills is not None and not refills.empty:
         colors = np.where(refills["direction"].to_numpy() == "bid", pal.bid, pal.ask)
         ax.scatter(
@@ -454,7 +449,12 @@ def _set_title(ax: Axes, title: str, notice: str | None, pal: Palette) -> None:
     )
 
 
-def _draw_depth_lines(ax: Axes, depth: pd.DataFrame, col_bias: float) -> None:
+def _draw_depth_lines(
+    ax: Axes,
+    depth: pd.DataFrame,
+    col_bias: float,
+    limits: tuple[float, float] | None,
+) -> None:
     """Draw one line per price level, colored by volume, with its colorbar."""
     depth = depth.sort_values(by="timestamp", kind="stable")
     depth["alpha"] = np.where(
@@ -462,7 +462,7 @@ def _draw_depth_lines(ax: Axes, depth: pd.DataFrame, col_bias: float) -> None:
     )
 
     cmap = plt.get_cmap("viridis")
-    norm = _volume_norm(depth["volume"], col_bias)
+    norm = _volume_norm(limits, col_bias)
 
     depth["timestamp_numeric"] = mdates.date2num(depth["timestamp"])
 
@@ -508,7 +508,6 @@ def mpl_depth_heatmap(
     trades = data["trades"]
     show_mp = data["show_mp"]
     col_bias = data["col_bias"]
-    price_by = data["price_by"]
 
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 7))
@@ -524,7 +523,7 @@ def mpl_depth_heatmap(
     # An empty book still draws the midprice and trades; the notice under the
     # title says why there are no levels.
     if not depth.empty:
-        _draw_depth_lines(ax, depth, col_bias)
+        _draw_depth_lines(ax, depth, col_bias, data["color_limits"])
 
     if spread is not None:
         spread_x = mdates.date2num(spread["timestamp"])
@@ -588,7 +587,7 @@ def mpl_depth_heatmap(
             )
 
     drew_icebergs = _draw_iceberg_overlay(
-        ax, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
+        ax, data["iceberg_chains"], data.get("iceberg_refills"), pal
     )
     hidden_trades_df = data.get("hidden_trades")
     drew_hidden = _draw_hidden_trades_overlay(ax, hidden_trades_df, pal)
@@ -605,15 +604,10 @@ def mpl_depth_heatmap(
     y_range = data.get("y_range")
     if y_range is not None:
         ax.set_ylim(y_range)
-    elif not depth.empty:
-        ymin = depth["price"].min()
-        ymax = depth["price"].max()
-        ax.set_ylim((ymin, ymax))
 
-    if price_by is not None and y_range is not None:
-        ymin, ymax = y_range
-        y_ticks = np.arange(round(ymin), round(ymax) + price_by, price_by)
-        ax.set_yticks(y_ticks)
+    price_ticks = data["price_ticks"]
+    if price_ticks is not None:
+        ax.set_yticks(price_ticks)
 
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
@@ -640,7 +634,6 @@ def mpl_order_activity_aggregate(
     events = data["events"]
     created = data["created"]
     deleted = data["deleted"]
-    price_by = data["price_by"]
 
     col_pal = {"bid": pal.bid, "ask": pal.ask}
 
@@ -650,28 +643,23 @@ def mpl_order_activity_aggregate(
         ax.set_title("Price Level Changes (no data)")
         return fig
 
-    sns.scatterplot(
-        data=created,
-        x="timestamp",
-        y="price",
-        size="volume",
-        sizes=(20, 200),
+    ax.scatter(
+        created["timestamp"],
+        created["price"],
+        s=created["marker_area"],
         color=pal.price_line,
-        ax=ax,
-        legend=False,
         marker="o",
+        edgecolors="white",
+        linewidths=0.75,
     )
-    sns.scatterplot(
-        data=deleted,
-        x="timestamp",
-        y="price",
-        size="volume",
-        sizes=(20, 200),
+    ax.scatter(
+        deleted["timestamp"],
+        deleted["price"],
+        s=deleted["marker_area"],
         color=pal.price_line,
-        ax=ax,
-        legend=False,
         marker="o",
-        edgecolor="black",
+        edgecolors="black",
+        linewidths=0.75,
         alpha=0.5,
     )
     # Direction-coloured dots: a fixed small marker (explicit ``s=``; the old
@@ -690,9 +678,7 @@ def mpl_order_activity_aggregate(
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Price")
-    ax.set_yticks(
-        _rounded_price_ticks(events["price"].min(), events["price"].max(), price_by)
-    )
+    ax.set_yticks(data["price_ticks"])
     # The map overlays two unlabelled mark families; a legend disambiguates the
     # gray volume-sized added/removed circles from the bid/ask direction dots.
     legend_handles = [
@@ -745,25 +731,6 @@ def mpl_order_activity_aggregate(
     return fig
 
 
-def _rounded_price_ticks(
-    lo: float, hi: float, price_by: float, *, max_ticks: int = 12
-) -> np.ndarray:
-    """Round-number price ticks spanning ``[lo, hi]``, thinned to <= ``max_ticks``.
-
-    The base grid steps by ``price_by``; when that would place more than
-    ``max_ticks`` ticks the step is widened to the next integer multiple of
-    ``price_by`` so the labels stay legible (the dense L3 Gantt and the event
-    map otherwise stacked one label per level into an unreadable smear).
-    """
-    if price_by <= 0:
-        return np.array([lo])
-    start = round(lo / price_by) * price_by
-    stop = round(hi / price_by) * price_by
-    n_steps = max(1, round((stop - start) / price_by))
-    factor = max(1, int(np.ceil(n_steps / max_ticks)))
-    return np.arange(start, stop, price_by * factor)
-
-
 def _mpl_book_bars(
     data: dict, ax: Axes | None, theme: PlotTheme, *, per_order: bool
 ) -> Figure:
@@ -780,7 +747,7 @@ def _mpl_book_bars(
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 8))
 
-    thickness = book_bar_thickness(bids, asks) * 0.9
+    thickness = data["bar_thickness"] * 0.9
     # Windowing to the touch keeps bars tall, so L3 separators are always on.
     edgecolor = "white" if per_order else "none"
     linewidth = 1.3 if per_order else 0.0
@@ -930,10 +897,11 @@ def mpl_cancellations_per_order(
 
     The latent populations span orders of magnitude, so a linear scatter
     crushes everything against the origin.  Each side gets its own log-log
-    hexbin (small multiples, bid | ask) where saturation encodes cancelled
-    orders per bin -- density, not magnitude.
+    grid of the payload's counts (small multiples, bid | ask) where
+    saturation encodes cancelled orders per cell -- density, not magnitude.
     """
     cmap = plt.get_cmap("Blues")
+    count_range = data["count_range"]
 
     if ax is None:
         # constrained layout: tight_layout cannot place a colorbar spanning two
@@ -941,52 +909,47 @@ def mpl_cancellations_per_order(
         fig, axes = plt.subplots(
             1, 2, figsize=(14, 6), sharex=True, sharey=True, layout="constrained"
         )
-        panels: list[tuple[Axes, pd.DataFrame, str]] = [
-            (axes[0], data["bids"], "bid"),
-            (axes[1], data["asks"], "ask"),
+        panels: list[tuple[Axes, np.ndarray | None, str]] = [
+            (axes[0], data["bid_counts"], "bid"),
+            (axes[1], data["ask_counts"], "ask"),
         ]
     else:
         fig = ax.get_figure()
         assert isinstance(fig, Figure)
         # Composition into a caller's single ax: both sides as one density.
-        combined = pd.concat([data["bids"], data["asks"]], ignore_index=True)
-        panels = [(ax, combined, "orders")]
+        panels = [(ax, data["counts"], "orders")]
 
-    last_hb = None
-    for panel_ax, side, label in panels:
-        if not side.empty:
-            hb = panel_ax.hexbin(
-                side["age_s"],
-                side["distance_from_touch"],
-                gridsize=25,
-                xscale="log",
-                yscale="log",
+    last_mesh = None
+    for panel_ax, counts, label in panels:
+        panel_ax.set_xscale("log")
+        panel_ax.set_yscale("log")
+        if counts is not None and count_range is not None:
+            mesh = panel_ax.pcolormesh(
+                data["age_edges"],
+                data["distance_edges"],
+                counts,
                 cmap=cmap,
                 # Log color: the instant-cancel spike is orders of magnitude
                 # denser than the patient/deep populations, which a linear ramp
                 # washes out entirely.
-                norm=mcolors.LogNorm(),
-                mincnt=1,
+                norm=mcolors.LogNorm(*count_range),
                 edgecolors="white",
                 linewidths=0.2,
             )
-            hb.set_rasterized(True)
-            last_hb = hb
+            mesh.set_rasterized(True)
+            last_mesh = mesh
             _annotate_cancel_populations(panel_ax, theme.palette)
-        else:
-            panel_ax.set_xscale("log")
-            panel_ax.set_yscale("log")
         panel_ax.set_title(f"Cancelled {label}")
         panel_ax.set_xlabel("Age at cancel (s, log)")
         panel_ax.set_ylabel("Distance from touch (bps, log)")
 
-    if last_hb is not None:
+    if last_mesh is not None:
         # One panel (the caller's ax) takes a single Axes, not a list: the
         # colorbar then shares the caller's gridspec, so the caller's
         # tight_layout can place it.  The two-panel colorbar is placed by the
         # constrained engine.
         cbar_ax = panels[0][0] if len(panels) == 1 else [p[0] for p in panels]
-        cbar = fig.colorbar(last_hb, ax=cbar_ax)
+        cbar = fig.colorbar(last_mesh, ax=cbar_ax)
         cbar.set_label("Cancelled orders per bin")
     # Layout is managed by the constrained engine (ax is None) or the caller
     # (ax provided); tight_layout cannot handle the multi-axes colorbar.
@@ -1007,7 +970,7 @@ def mpl_order_activity_per_order(
     pal = theme.palette
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 7))
-    show_markers = data.get("show_markers", False)
+    show_markers = data["show_markers"]
     drew_any = False
     for side, color, label, marker in (
         (data["filled"], pal.filled, "filled", "x"),
@@ -1045,7 +1008,7 @@ def mpl_order_activity_per_order(
                 )
 
     drew_icebergs = _draw_iceberg_overlay(
-        ax, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
+        ax, data["iceberg_chains"], data.get("iceberg_refills"), pal
     )
     hidden_trades_df = data.get("hidden_trades")
     drew_hidden = _draw_hidden_trades_overlay(ax, hidden_trades_df, pal)
@@ -1053,10 +1016,11 @@ def mpl_order_activity_per_order(
     format_time_axis(ax)
 
     y_range = data.get("y_range")
-    price_by = data["price_by"]
     if y_range is not None:
         ax.set_ylim(y_range)
-        ax.set_yticks(_rounded_price_ticks(y_range[0], y_range[1], price_by))
+    price_ticks = data["price_ticks"]
+    if price_ticks is not None:
+        ax.set_yticks(price_ticks)
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Limit Price")
@@ -1125,7 +1089,7 @@ def mpl_queue_position_per_order(
     pal = theme.palette
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 7))
-    show_markers = data.get("show_markers", False)
+    show_markers = data["show_markers"]
     drew_any = False
     for side, color, label, marker in (
         (data["filled"], pal.filled, "filled", "x"),
@@ -1157,7 +1121,7 @@ def mpl_queue_position_per_order(
         )
         ax.autoscale_view()
         if show_markers and marker is not None:
-            ends = side.groupby("id", sort=False).tail(1)
+            ends = data["ends"][label]
             x = mdates.date2num(ends["timestamp"])
             if marker == "o":  # cancelled: open circle
                 ax.scatter(
@@ -1174,7 +1138,7 @@ def mpl_queue_position_per_order(
                 ax.scatter(x, ends["rank"], marker=marker, s=22, color=color, zorder=4)
 
     format_time_axis(ax)
-    ax.set_ylim(bottom=0.5, top=data.get("max_rank", 1) + 0.5)
+    ax.set_ylim(bottom=0.5, top=data["max_rank"] + 0.5)
     ax.invert_yaxis()  # rank 1 (front of queue) at the top
     ax.set_xlabel("Time")
     ax.set_ylabel("Queue rank (1 = front)")
@@ -1818,31 +1782,33 @@ def mpl_events_histogram(
 ) -> Figure:
     """Render an events price/volume histogram."""
     pal = theme.palette
-    events = data["events"]
     val = data["val"]
-    bw = data["bw"]
+    edges = data["edges"]
 
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 7))
-    if events.empty:
+    if edges is None:
         ax.set_title(f"Events {val} distribution (no data)")
         return fig
     # Overlaid step outlines instead of dodged bars: dodging splits each bin
     # into side-by-side combs that misread as a finer x-resolution; layered
     # steps compare the bid and ask distributions bin-for-bin.
-    sns.histplot(
-        data=events,
-        x=val,
-        hue="direction",
-        element="step",
-        multiple="layer",
-        fill=True,
-        alpha=0.35,
-        binwidth=bw,
-        palette={"bid": pal.bid, "ask": pal.ask},
-        linewidth=1.2,
-        ax=ax,
-    )
+    for counts, color, label in (
+        (data["bid_counts"], pal.bid, "bid"),
+        (data["ask_counts"], pal.ask, "ask"),
+    ):
+        if counts is None:
+            continue
+        ax.stairs(
+            counts,
+            edges,
+            fill=True,
+            facecolor=mcolors.to_rgba(color, 0.35),
+            edgecolor=color,
+            linewidth=1.2,
+            label=label,
+        )
+    ax.legend(title="direction")
     ax.set_title(f"Events {val} distribution")
     ax.set_xlabel(val.capitalize())
     ax.set_ylabel("Count")
@@ -1860,7 +1826,6 @@ def mpl_vpin(
     pal = theme.palette
     vpin_df = data["vpin_df"]
     threshold = data["threshold"]
-    bar_width = data["bar_width"]
 
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 5))
@@ -1885,7 +1850,7 @@ def mpl_vpin(
     ax.bar(
         vpin_df["timestamp_end"],
         vpin_df["vpin"],
-        width=bar_width,
+        width=data["bar_width"],
         color=pal.series,
         alpha=0.35,
         label="Per-bucket VPIN",
@@ -2228,18 +2193,11 @@ def mpl_kyle_lambda(
         zorder=3,
     )
 
-    if not np.isnan(lambda_):
-        x_range = np.linspace(
-            reg_df["signed_volume"].min(),
-            reg_df["signed_volume"].max(),
-            100,
-        )
-        intercept = (
-            reg_df["delta_price"].mean() - lambda_ * reg_df["signed_volume"].mean()
-        )
+    fit_line = data["fit_line"]
+    if fit_line is not None:
         ax.plot(
-            x_range,
-            intercept + lambda_ * x_range,
+            fit_line["x"],
+            fit_line["y"],
             color=pal.emphasis,
             linewidth=2,
             label=f"λ = {lambda_:.6f}",
@@ -2255,7 +2213,7 @@ def mpl_kyle_lambda(
     if not np.isnan(r_squared):
         title += f"\nR² = {r_squared:.3f}, t = {t_stat:.2f}"
     ax.set_title(title)
-    if not np.isnan(lambda_):  # the fit line is the only labelled artist
+    if fit_line is not None:  # the fit line is the only labelled artist
         ax.legend(loc="upper left")
     if own_figure:
         fig.tight_layout()
@@ -2450,9 +2408,7 @@ def mpl_bars(
         alpha=0.25,
         linewidth=0,
     )
-    # Four times the tallest bar: the strip reads as a footer under the
-    # candles rather than competing with them.
-    ax2.set_ylim(0, float(volume.max()) * 4 if volume.size and volume.max() > 0 else 1)
+    ax2.set_ylim(0, data["volume_top"])
     ax2.set_ylabel("Volume")
     ax2.grid(False)
 

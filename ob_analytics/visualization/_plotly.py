@@ -10,7 +10,6 @@ Install via ``pip install ob-analytics[interactive]``.
 from __future__ import annotations
 
 import html
-import math
 from functools import lru_cache, partial
 from typing import Any
 
@@ -28,7 +27,7 @@ from ob_analytics.visualization._data import (
     l1_card_texts,
     mpl_marker_area_to_plotly_size,
 )
-from ob_analytics.visualization._palette import Palette, iceberg_opacity
+from ob_analytics.visualization._palette import Palette
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 L2, L3 = Level.L2, Level.L3
@@ -197,7 +196,11 @@ def plotly_trade_tape_aggregate(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
 
 
 def _biased_color_norm(
-    volume: np.ndarray, col_bias: float, n_ticks: int = 5
+    volume: np.ndarray,
+    col_bias: float,
+    n_ticks: int = 5,
+    *,
+    limits: tuple[float, float] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Map volumes to [0, 1] color positions under a power/log bias.
 
@@ -206,7 +209,7 @@ def _biased_color_norm(
     ``marker.colorbar`` kwarg shape: ticks sit in normalized ``[0, 1]`` space
     but are labeled in original volume units.
     """
-    t, tickvals, ticktext = biased_color_norm(volume, col_bias, n_ticks)
+    t, tickvals, ticktext = biased_color_norm(volume, col_bias, n_ticks, limits=limits)
     bar: dict[str, Any] = {"title": "Volume", "x": 1.02, "len": 0.75}
     if tickvals:
         bar["tickvals"] = tickvals
@@ -233,7 +236,13 @@ def _hide_axes(fig: Any) -> None:
     fig.update_yaxes(visible=False)
 
 
-def _add_depth_image(fig: Any, go: Any, depth: pd.DataFrame, col_bias: float) -> None:
+def _add_depth_image(
+    fig: Any,
+    go: Any,
+    depth: pd.DataFrame,
+    col_bias: float,
+    limits: tuple[float, float] | None,
+) -> None:
     """Draw the depth levels as one image behind the other traces.
 
     One image of :func:`~ob_analytics.visualization._data.depth_raster`'s
@@ -256,9 +265,9 @@ def _add_depth_image(fig: Any, go: Any, depth: pd.DataFrame, col_bias: float) ->
     top = bottom + rows * step
     t0, t1 = raster["t0"], raster["t1"]
 
-    # Mirror the matplotlib col_bias norm: colors at the biased positions,
-    # colorbar ticks in real volume units.
-    color_t, colorbar = _biased_color_norm(grid.ravel(), col_bias)
+    # The payload's colour limits, as the other backends use: colors at the
+    # biased positions, colorbar ticks in real volume units.
+    color_t, colorbar = _biased_color_norm(grid.ravel(), col_bias, limits=limits)
     rgba = colormaps["viridis"](color_t.reshape(grid.shape), bytes=True)
     rgba[..., 3] = np.where(np.isnan(grid), 0, np.where(grid < 1, 26, 255))
     # Image rows run top down; grid row 0 is the lowest price.
@@ -306,13 +315,13 @@ def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
     spread = data["spread"]
     trades = data["trades"]
     show_mp = data["show_mp"]
-    col_bias = data.get("col_bias", 1.0)
+    col_bias = data["col_bias"]
 
     notice = data.get("notice") or (NO_DEPTH_NOTICE if depth.empty else None)
     fig = _base_figure(go, theme, title="Price Levels Over Time", notice=notice)
 
     if not depth.empty:
-        _add_depth_image(fig, go, depth, col_bias)
+        _add_depth_image(fig, go, depth, col_bias, data["color_limits"])
         fig.update_layout(margin={"l": 60, "r": 90, "t": 50, "b": 50})
 
     if spread is not None and show_mp:
@@ -393,13 +402,14 @@ def plotly_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
             )
 
     _add_iceberg_overlay(
-        fig, go, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
+        fig, go, data["iceberg_chains"], data.get("iceberg_refills"), pal
     )
     _add_hidden_trades_overlay(fig, go, data.get("hidden_trades"), pal)
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
     _apply_y_range(fig, data.get("y_range"))
+    _apply_price_ticks(fig, data["price_ticks"])
     return fig
 
 
@@ -430,7 +440,9 @@ def plotly_order_activity_aggregate(
                     y=subset["price"],
                     mode="markers",
                     marker={
-                        "size": np.clip(subset["volume"] * 20, 3, 15),
+                        "size": mpl_marker_area_to_plotly_size(
+                            subset["marker_area"].to_numpy()
+                        ),
                         "color": col_map[direction],
                         "opacity": 0.6,
                     },
@@ -454,7 +466,9 @@ def plotly_order_activity_aggregate(
                     y=subset["price"],
                     mode="markers",
                     marker={
-                        "size": np.clip(subset["volume"] * 20, 3, 15),
+                        "size": mpl_marker_area_to_plotly_size(
+                            subset["marker_area"].to_numpy()
+                        ),
                         "color": col_map[direction],
                         "opacity": 0.3,
                         "symbol": "x",
@@ -470,6 +484,7 @@ def plotly_order_activity_aggregate(
 
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Price")
+    _apply_price_ticks(fig, data["price_ticks"])
     return fig
 
 
@@ -529,7 +544,8 @@ def _plotly_book_bars(
         go, theme, title=data["timestamp"].strftime("%Y-%m-%d %H:%M:%S UTC")
     )
 
-    for trace in _book_bar_traces(go, data, per_order=per_order, pal=pal):
+    width = 0.9 * data["bar_thickness"]
+    for trace in _book_bar_traces(go, data, per_order=per_order, pal=pal, width=width):
         if len(trace.y):
             fig.add_trace(trace)
 
@@ -916,15 +932,7 @@ def _plotly_book_replay(
     from plotly.subplots import make_subplots
 
     snapshots = data["snapshots"]
-    size_max = max(
-        (
-            float(side["seg_hi"].max())
-            for snapshot in snapshots
-            for side in (snapshot["bids"], snapshot["asks"])
-            if not side.empty
-        ),
-        default=1.0,
-    )
+    size_max = data["size_max"]
     # One thickness for every frame: Plotly would otherwise size each frame's
     # bars from that frame's own price gaps, and the bars would change height.
     bar_width = 0.9 * data["bar_thickness"]
@@ -1150,39 +1158,16 @@ def plotly_depth_chart_per_order(
     return _plotly_depth_curve(data, per_order=True, theme=theme)
 
 
-# Log-decade ticks shared by both cancel panels (axes carry log10 values, so
-# ticks sit at integer positions and are relabeled into human units).
-_AGE_TICKVALS = list(range(-3, 3))
-_AGE_TICKTEXT = ["1ms", "10ms", "100ms", "1s", "10s", "100s"]
-_DIST_TICKVALS = list(range(-2, 3))
-_DIST_TICKTEXT = ["0.01", "0.1", "1", "10", "100"]
-
-
-def _log_density_grid(side: Any, xedges: np.ndarray, yedges: np.ndarray) -> np.ndarray:
-    """Counts per (log10 age, log10 distance) bin, zeros masked to NaN.
-
-    Binning server-side and shipping only the grid keeps the exported HTML
-    small -- a raw ``Histogram2d``/``Scattergl`` would carry every cancelled
-    order (megabytes); this carries one number per cell.
-    """
-    counts, _, _ = np.histogram2d(
-        np.log10(side["age_s"]),
-        np.log10(side["distance_from_touch"]),
-        bins=[xedges, yedges],
-    )
-    return np.where(counts == 0, np.nan, counts).T  # (y, x) for Heatmap z
-
-
 @renders("cancellations", L3)
 def plotly_cancellations_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Any:
     """L3 (MBO) cancellations: per-side log-log *density* of age x distance.
 
-    A pre-binned ``go.Heatmap`` per side (small multiples, bid | ask) replaces
-    the old raw ``Scattergl`` point cloud: it reveals the latent populations on
-    log-log axes and keeps the exported HTML small (one grid of counts, not one
-    marker per cancelled order).
+    A ``go.Heatmap`` of the payload's counts per side (small multiples,
+    bid | ask): it reveals the latent populations on log-log axes and keeps
+    the exported HTML small (one grid of counts, not one marker per
+    cancelled order).
     """
     go = _import_plotly()
     from plotly.subplots import make_subplots
@@ -1195,58 +1180,42 @@ def plotly_cancellations_per_order(
         subplot_titles=("Cancelled bid", "Cancelled ask"),
     )
     fig.update_layout(template=_template(go, theme))
+    count_range = data["count_range"]
+    coloraxis: dict[str, Any] = {
+        "colorscale": "Blues",
+        "colorbar": {"title": "Orders<br>per bin"},
+    }
+    if count_range is not None:
+        coloraxis["cmin"], coloraxis["cmax"] = count_range
     fig.update_layout(
         title={"text": "Cancelled orders by age and distance from touch"},
-        coloraxis={"colorscale": "Blues", "colorbar": {"title": "Orders<br>per bin"}},
+        coloraxis=coloraxis,
         hovermode="closest",
     )
 
-    sides = [(1, data["bids"]), (2, data["asks"])]
-    populated = [s for _, s in sides if not s.empty]
-    if populated:
-        # Shared log-space bin edges so the two panels are directly comparable.
-        all_x = np.log10(np.concatenate([s["age_s"].to_numpy() for s in populated]))
-        all_y = np.log10(
-            np.concatenate([s["distance_from_touch"].to_numpy() for s in populated])
-        )
-        xedges = np.linspace(all_x.min(), all_x.max(), 31)
-        yedges = np.linspace(all_y.min(), all_y.max(), 31)
-        xcent = (xedges[:-1] + xedges[1:]) / 2
-        ycent = (yedges[:-1] + yedges[1:]) / 2
-
-        for col, side in sides:
-            if side.empty:
-                continue
-            fig.add_trace(
-                go.Heatmap(
-                    z=_log_density_grid(side, xedges, yedges),
-                    x=xcent,
-                    y=ycent,
-                    coloraxis="coloraxis",
-                    hovertemplate=(
-                        "log10 age: %{x:.1f}<br>log10 dist: %{y:.1f}"
-                        "<br>orders: %{z}<extra></extra>"
-                    ),
+    # The cell edges, one more than the cells, place each cell on the log
+    # axes; both panels share them.
+    for col, counts in ((1, data["bid_counts"]), (2, data["ask_counts"])):
+        if counts is None or count_range is None:
+            continue
+        fig.add_trace(
+            go.Heatmap(
+                z=counts,
+                x=data["age_edges"],
+                y=data["distance_edges"],
+                coloraxis="coloraxis",
+                hovertemplate=(
+                    "age: %{x:.3g} s<br>distance: %{y:.3g} bps"
+                    "<br>orders: %{z}<extra></extra>"
                 ),
-                row=1,
-                col=col,
-            )
-
-    for col in (1, 2):
-        fig.update_xaxes(
-            title_text="Age at cancel",
-            tickvals=_AGE_TICKVALS,
-            ticktext=_AGE_TICKTEXT,
+            ),
             row=1,
             col=col,
         )
-    fig.update_yaxes(
-        title_text="Distance from touch (bps)",
-        tickvals=_DIST_TICKVALS,
-        ticktext=_DIST_TICKTEXT,
-        row=1,
-        col=1,
-    )
+
+    for col in (1, 2):
+        fig.update_xaxes(title_text="Age at cancel (s)", type="log", row=1, col=col)
+    fig.update_yaxes(title_text="Distance from touch (bps)", type="log", row=1, col=1)
     return fig
 
 
@@ -1326,44 +1295,39 @@ def _plotly_lollipops(fig: Any, go: Any, side: Any, color: str, label: str) -> N
 # ---------------------------------------------------------------------------
 
 
-def _iceberg_chain_xy(group: Any) -> tuple[list, list]:
-    """One ``None``-gapped polyline per iceberg within *group* (>=2 slices)."""
-    xs: list = []
-    ys: list = []
-    for _, g in group.groupby("iceberg", sort=False):
-        xs.extend(g["timestamp"].tolist())
-        xs.append(None)
-        ys.extend(g["price"].tolist())
-        ys.append(None)
-    return xs, ys
-
-
 def _add_iceberg_overlay(
-    fig: Any, go: Any, lines: Any | None, refills: Any | None, pal: Palette
+    fig: Any,
+    go: Any,
+    chains: list[dict[str, Any]],
+    refills: Any | None,
+    pal: Palette,
 ) -> None:
-    """Add suspected-iceberg chains (opacity = confidence) + refill markers."""
-    if lines is not None and not lines.empty:
-        first = True
-        for confidence, group in lines.groupby("confidence", observed=True, sort=False):
-            for direction, gg in group.groupby("direction", sort=False):
-                xs, ys = _iceberg_chain_xy(gg)
-                if not xs:
-                    continue
-                color = pal.bid if direction == "bid" else pal.ask
-                fig.add_trace(
-                    go.Scattergl(
-                        x=xs,
-                        y=ys,
-                        mode="lines",
-                        line={"color": color, "width": 1.4},
-                        opacity=iceberg_opacity(confidence),
-                        name="Iceberg chain",
-                        legendgroup="iceberg_chain",
-                        showlegend=first,
-                        hoverinfo="skip",
-                    )
-                )
-                first = False
+    """Add suspected-iceberg chains (opacity = confidence) + refill markers.
+
+    The chains of one side and opacity share one ``None``-gapped trace.
+    """
+    traces: dict[tuple[str, float], tuple[list, list]] = {}
+    for chain in chains:
+        xs, ys = traces.setdefault((chain["direction"], chain["opacity"]), ([], []))
+        xs.extend([*chain["timestamp"], None])
+        ys.extend([*chain["price"], None])
+    for i, ((direction, opacity), (xs, ys)) in enumerate(traces.items()):
+        fig.add_trace(
+            go.Scattergl(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line={
+                    "color": pal.bid if direction == "bid" else pal.ask,
+                    "width": 1.4,
+                },
+                opacity=opacity,
+                name="Iceberg chain",
+                legendgroup="iceberg_chain",
+                showlegend=i == 0,
+                hoverinfo="skip",
+            )
+        )
     if refills is not None and not refills.empty:
         colors = np.where(refills["direction"].to_numpy() == "bid", pal.bid, pal.ask)
         fig.add_trace(
@@ -1432,6 +1396,12 @@ def _apply_y_range(fig: Any, y_range: tuple[float, float] | None) -> None:
         fig.update_yaxes(range=list(y_range))
 
 
+def _apply_price_ticks(fig: Any, ticks: np.ndarray | None) -> None:
+    """Put the price axis ticks at the payload's *ticks*, if it has them."""
+    if ticks is not None:
+        fig.update_yaxes(tickmode="array", tickvals=list(ticks))
+
+
 @renders("order_activity", L3)
 def plotly_order_activity_per_order(
     data: dict, *, theme: PlotTheme = DEFAULT_THEME
@@ -1445,10 +1415,11 @@ def plotly_order_activity_per_order(
     pal = theme.palette
     go = _import_plotly()
     fig = _base_figure(go, theme, title="Order lifecycles (place → outcome)")
-    for side, color, label in (
-        (data["filled"], pal.filled, "filled"),
-        (data["cancelled"], pal.cancelled, "cancelled"),
-        (data["resting"], pal.partial, "still resting"),
+    show_markers = data["show_markers"]
+    for side, color, label, symbol in (
+        (data["filled"], pal.filled, "filled", "x-thin-open"),
+        (data["cancelled"], pal.cancelled, "cancelled", "circle-open"),
+        (data["resting"], pal.partial, "still resting", None),
     ):
         if side.empty:
             continue
@@ -1461,12 +1432,17 @@ def plotly_order_activity_per_order(
                 line={"color": color, "width": 1.5},
                 opacity=0.6,
                 name=label,
+                legendgroup=label,
                 hoverinfo="skip",
             )
         )
+        if show_markers and symbol is not None:
+            fig.add_trace(
+                _end_markers(go, side["end_ts"], side["price"], color, symbol, label)
+            )
 
     _add_iceberg_overlay(
-        fig, go, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
+        fig, go, data["iceberg_chains"], data.get("iceberg_refills"), pal
     )
     _add_hidden_trades_overlay(fig, go, data.get("hidden_trades"), pal)
 
@@ -1484,7 +1460,22 @@ def plotly_order_activity_per_order(
     fig.update_xaxes(title_text="Time")
     fig.update_yaxes(title_text="Limit Price")
     _apply_y_range(fig, data.get("y_range"))
+    _apply_price_ticks(fig, data["price_ticks"])
     return fig
+
+
+def _end_markers(go: Any, x: Any, y: Any, color: str, symbol: str, label: str) -> Any:
+    """The marks at the end of each order of one fate (× filled, ○ cancelled)."""
+    return go.Scattergl(
+        x=x,
+        y=y,
+        mode="markers",
+        marker={"symbol": symbol, "size": 6, "color": color, "line": {"width": 1}},
+        name=label,
+        legendgroup=label,
+        showlegend=False,
+        hoverinfo="skip",
+    )
 
 
 def _queue_traj_xy(side: Any) -> tuple[list, list]:
@@ -1512,10 +1503,11 @@ def plotly_queue_position_per_order(
     pal = theme.palette
     go = _import_plotly()
     fig = _base_figure(go, theme, title="Queue position at the touch")
-    for side, color, label in (
-        (data["filled"], pal.filled, "filled"),
-        (data["cancelled"], pal.cancelled, "cancelled"),
-        (data["resting"], pal.partial, "still resting"),
+    show_markers = data["show_markers"]
+    for side, color, label, symbol in (
+        (data["filled"], pal.filled, "filled", "x-thin-open"),
+        (data["cancelled"], pal.cancelled, "cancelled", "circle-open"),
+        (data["resting"], pal.partial, "still resting", None),
     ):
         if side.empty:
             continue
@@ -1528,11 +1520,20 @@ def plotly_queue_position_per_order(
                 line={"color": color, "width": 1.2, "shape": "hv"},
                 opacity=0.6,
                 name=label,
+                legendgroup=label,
                 hoverinfo="skip",
             )
         )
+        if show_markers and symbol is not None:
+            ends = data["ends"][label]
+            fig.add_trace(
+                _end_markers(go, ends["timestamp"], ends["rank"], color, symbol, label)
+            )
     fig.update_xaxes(title_text="Time")
-    fig.update_yaxes(title_text="Queue rank (1 = front)", autorange="reversed")
+    # Reversed, so rank 1 (the front of the queue) is at the top.
+    fig.update_yaxes(
+        title_text="Queue rank (1 = front)", range=[data["max_rank"] + 0.5, 0.5]
+    )
     return fig
 
 
@@ -1561,17 +1562,13 @@ def plotly_liquidity_at_touch_aggregate(
 
     rug = data.get("rug")
     if rug is not None:
-        # Event rug below the series (created / cancelled / filled ticks).
-        vmax = max(
-            float(data["bid_vol"].max()) if len(data["bid_vol"]) else 0.0,
-            float(data["ask_vol"].max()) if len(data["ask_vol"]) else 0.0,
-            1.0,
-        )
-        step = vmax * 0.04
+        # Event rug at the bottom, on a hidden axis that spans 0 to 1, so each
+        # row sits at a fixed height whatever the sizes (as on matplotlib).
+        fig.update_layout(yaxis2={"overlaying": "y", "range": [0, 1], "visible": False})
         for cat, color, level in (
-            ("created", pal.reference_line, -step),
-            ("cancelled", pal.cancelled, -2 * step),
-            ("filled", pal.filled, -3 * step),
+            ("created", pal.reference_line, 0.008),
+            ("cancelled", pal.cancelled, 0.028),
+            ("filled", pal.filled, 0.048),
         ):
             t = rug.get(cat)
             if t is not None and len(t):
@@ -1579,6 +1576,7 @@ def plotly_liquidity_at_touch_aggregate(
                     go.Scattergl(
                         x=t,
                         y=[level] * len(t),
+                        yaxis="y2",
                         mode="markers",
                         marker={
                             "symbol": "line-ns-open",
@@ -2051,6 +2049,7 @@ def plotly_depth_bands(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     legend_entries = data["legend_entries"]
     max_ask = data["max_ask"]
     max_bid = data["max_bid"]
+    perc_line = data["perc_line"]
     side_line = data["side_line"]
 
     if asks_cumsum.empty:
@@ -2073,7 +2072,8 @@ def plotly_depth_bands(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
                     x=cumsum.index,
                     y=cumsum[col].values,
                     mode="lines",
-                    line={"width": 0.5, "color": "black"},
+                    # A black edge between bands only with perc_line.
+                    line={"width": 0.5 if perc_line else 0, "color": "black"},
                     fill="tozeroy" if col == cols[0] else "tonexty",
                     fillcolor=_to_rgb(colors_dict[col]),
                     name=str(col),
@@ -2120,59 +2120,33 @@ def plotly_depth_bands(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
-def _histogram_edges(
-    values: np.ndarray, bw: float | None, max_bins: int = 1000
-) -> np.ndarray:
-    """Bin edges for *values*: of width *bw*, or the Freedman-Diaconis width.
-
-    The number of bins is capped at *max_bins*, so a heavy tail or a tiny
-    *bw* cannot make millions of bins.
-    """
-    values = values[np.isfinite(values)]
-    if values.size == 0:
-        return np.array([0.0, 1.0])
-    lo, hi = float(values.min()), float(values.max())
-    if not hi > lo:
-        return np.array([lo - 0.5, hi + 0.5])
-    if bw is None or not bw > 0:
-        q75, q25 = np.percentile(values, [75, 25])
-        bw = 2 * (q75 - q25) * values.size ** (-1 / 3)
-        sturges = (hi - lo) / (np.log2(values.size) + 1)
-        bw = min(bw, sturges) if bw > 0 else sturges
-    n_bins = min(max_bins, max(1, math.ceil((hi - lo) / bw)))
-    if n_bins == max_bins:
-        return np.linspace(lo, hi, n_bins + 1)
-    start = math.floor(lo / bw) * bw
-    # One edge past the largest value, so rounding cannot leave it out.
-    return start + bw * np.arange(math.floor((hi - start) / bw) + 2)
-
-
 @renders("events_histogram", L2)
 def plotly_events_histogram(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     """Render an events price/volume histogram."""
     pal = theme.palette
     go = _import_plotly()
-    events = data["events"]
     val = data["val"]
-    bw = data["bw"]
+    edges = data["edges"]
 
-    if events.empty:
+    if edges is None:
         return _base_figure(go, theme, title=f"Events {val} distribution (no data)")
     fig = _base_figure(go, theme, title=f"Events {val} distribution")
 
-    # Binned here, not by plotly.js: a Histogram trace sends every event.
-    edges = _histogram_edges(events[val].to_numpy(dtype=float), bw)
-    for direction, color in [("bid", pal.bid), ("ask", pal.ask)]:
-        subset = events[events["direction"] == direction]
-        if subset.empty:
+    # Bars from the payload's bins, not a Histogram trace: plotly.js would
+    # be sent every event.  Each bar spans its bin.
+    for counts, color, name in (
+        (data["bid_counts"], pal.bid, "Bid"),
+        (data["ask_counts"], pal.ask, "Ask"),
+    ):
+        if counts is None:
             continue
-        counts, _ = np.histogram(subset[val].to_numpy(dtype=float), bins=edges)
         fig.add_trace(
             go.Bar(
-                x=(edges[:-1] + edges[1:]) / 2,
+                x=edges[:-1],
                 y=counts,
                 width=np.diff(edges),
-                name=direction.capitalize(),
+                offset=0,
+                name=name,
                 marker_color=color,
                 opacity=0.7,
             )
@@ -2520,19 +2494,12 @@ def plotly_kyle_lambda(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
         )
     )
 
-    if not np.isnan(lambda_):
-        x_range = np.linspace(
-            reg_df["signed_volume"].min(),
-            reg_df["signed_volume"].max(),
-            100,
-        )
-        intercept = (
-            reg_df["delta_price"].mean() - lambda_ * reg_df["signed_volume"].mean()
-        )
+    fit_line = data["fit_line"]
+    if fit_line is not None:
         fig.add_trace(
             go.Scatter(
-                x=x_range,
-                y=intercept + lambda_ * x_range,
+                x=fit_line["x"],
+                y=fit_line["y"],
                 mode="lines",
                 line={"color": pal.emphasis, "width": 2.5},
                 name=f"λ = {lambda_:.6f}",
@@ -2757,16 +2724,13 @@ def plotly_bars(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
             )
         )
 
-    # Four times the tallest bar: the volume strip reads as a footer under the
-    # candles rather than competing with them.
-    top = float(volume.max()) * 4 if volume.size and volume.max() > 0 else 1.0
     fig.update_layout(
         xaxis_rangeslider_visible=False,
         showlegend=True,
         yaxis2={
             "overlaying": "y",
             "side": "right",
-            "range": [0, top],
+            "range": [0, data["volume_top"]],
             "showgrid": False,
             "title": {"text": "Volume"},
         },

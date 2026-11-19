@@ -40,6 +40,7 @@ from ob_analytics.flow_toxicity import (
 )
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import validate_columns
+from ob_analytics.visualization._palette import iceberg_opacity
 
 
 @dataclass(frozen=True)
@@ -217,31 +218,52 @@ def format_volume_tick(value: float) -> str:
     return f"{value:.3g}"
 
 
-def biased_color_norm(
-    volume: np.ndarray, col_bias: float, n_ticks: int = 5
-) -> tuple[np.ndarray, list[float], list[str]]:
-    """Map volumes to [0, 1] color positions under a power/log bias.
+def color_limits(
+    volume: np.ndarray | pd.Series, col_bias: float
+) -> tuple[float, float] | None:
+    """The volume range the depth heatmap's colours span.
 
-    Shared by the plotly and bokeh depth-heatmap backends (matplotlib's
-    ``_volume_norm`` stays independent, since it returns a matplotlib
-    ``Normalize`` object rather than a plain array). ``col_bias`` of ``1.0``
-    is linear, ``0 < col_bias < 1`` is a power-law gamma that brightens
-    low-volume levels, and ``col_bias <= 0`` selects log10. Returns the
-    normalized color array plus colorbar tick positions (in ``[0, 1]``) and
-    labels (in original volume units) -- empty lists when no volume is
-    finite (and positive, under a log bias).
+    The smallest and largest finite volume; under a log bias
+    (``col_bias <= 0``) only positive volumes count.  When they are equal,
+    the top is one unit higher, so the range is never empty.  Returns
+    ``None`` when no volume counts.  Every backend colours the heatmap
+    between these two values.
     """
     v = np.asarray(volume, dtype=float)
-    if col_bias <= 0:
-        finite = v[np.isfinite(v) & (v > 0)]
-    else:
-        finite = v[np.isfinite(v)]
+    keep = np.isfinite(v) & (v > 0) if col_bias <= 0 else np.isfinite(v)
+    finite = v[keep]
     if finite.size == 0:
-        return np.zeros_like(v), [], []
+        return None
     vmin = float(finite.min())
     vmax = float(finite.max())
     if vmax <= vmin:
         vmax = vmin + 1.0
+    return vmin, vmax
+
+
+def biased_color_norm(
+    volume: np.ndarray,
+    col_bias: float,
+    n_ticks: int = 5,
+    *,
+    limits: tuple[float, float] | None = None,
+) -> tuple[np.ndarray, list[float], list[str]]:
+    """Map volumes to [0, 1] color positions under a power/log bias.
+
+    ``col_bias`` of ``1.0`` is linear, ``0 < col_bias < 1`` is a power-law
+    gamma that brightens low-volume levels, and ``col_bias <= 0`` selects
+    log10.  *limits* is the ``(low, high)`` volume range of the colours,
+    usually the payload's ``color_limits``; ``None`` takes
+    :func:`color_limits` of *volume*.  Returns the normalized color array
+    plus colorbar tick positions (in ``[0, 1]``) and labels (in original
+    volume units) -- empty lists when there are no limits.
+    """
+    v = np.asarray(volume, dtype=float)
+    if limits is None:
+        limits = color_limits(v, col_bias)
+    if limits is None:
+        return np.zeros_like(v), [], []
+    vmin, vmax = limits
 
     if col_bias <= 0:
         lo, hi = math.log(vmin), math.log(vmax)
@@ -343,6 +365,74 @@ def _price_axis_breaks(
         step=price_by,
     )
     return price_by, y_breaks
+
+
+def rounded_price_ticks(
+    lo: float, hi: float, price_by: float, *, max_ticks: int = 12
+) -> np.ndarray:
+    """Round-number price ticks spanning ``[lo, hi]``, thinned to <= ``max_ticks``.
+
+    The base grid steps by ``price_by``; when that would place more than
+    ``max_ticks`` ticks the step is widened to the next integer multiple of
+    ``price_by`` so the labels stay legible (the dense L3 Gantt and the event
+    map otherwise stacked one label per level into an unreadable smear).
+    """
+    if price_by <= 0:
+        return np.array([lo])
+    start = round(lo / price_by) * price_by
+    stop = round(hi / price_by) * price_by
+    n_steps = max(1, round((stop - start) / price_by))
+    factor = max(1, math.ceil(n_steps / max_ticks))
+    return np.arange(start, stop, price_by * factor)
+
+
+def histogram_edges(
+    values: np.ndarray, bw: float | None, max_bins: int = 1000
+) -> np.ndarray:
+    """Bin edges for *values*: of width *bw*, or the Freedman-Diaconis width.
+
+    The number of bins is capped at *max_bins*, so a heavy tail or a tiny
+    *bw* cannot make millions of bins.
+    """
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.array([0.0, 1.0])
+    lo, hi = float(values.min()), float(values.max())
+    if not hi > lo:
+        return np.array([lo - 0.5, hi + 0.5])
+    if bw is None or not bw > 0:
+        q75, q25 = np.percentile(values, [75, 25])
+        bw = 2 * (q75 - q25) * values.size ** (-1 / 3)
+        sturges = (hi - lo) / (np.log2(values.size) + 1)
+        bw = min(bw, sturges) if bw > 0 else sturges
+    n_bins = min(max_bins, max(1, math.ceil((hi - lo) / bw)))
+    if n_bins == max_bins:
+        return np.linspace(lo, hi, n_bins + 1)
+    start = math.floor(lo / bw) * bw
+    # One edge past the largest value, so rounding cannot leave it out.
+    return start + bw * np.arange(math.floor((hi - start) / bw) + 2)
+
+
+def iceberg_chains(lines: pd.DataFrame | None) -> list[dict[str, Any]]:
+    """Each suspected iceberg of *lines* as one chain to draw.
+
+    *lines* is the ``iceberg_lines`` frame of
+    :func:`prepare_hidden_liquidity_overlay`.  Each chain is a dict with the
+    ``timestamp`` and ``price`` of its slices, its side (``direction``,
+    ``"bid"`` or ``"ask"``) and the ``opacity`` its confidence is drawn at.
+    Returns an empty list when there are no lines.
+    """
+    if lines is None or lines.empty:
+        return []
+    return [
+        {
+            "timestamp": g["timestamp"],
+            "price": g["price"],
+            "direction": g["direction"].iloc[0],
+            "opacity": iceberg_opacity(g["confidence"].iloc[0]),
+        }
+        for _, g in lines.groupby("iceberg", sort=False)
+    ]
 
 
 def resolve_level(concept: str, level: Level | str | None) -> Level | None:
@@ -900,7 +990,13 @@ def prepare_depth_heatmap_data(
     ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
     optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`),
     already clipped to the caller's display window. ``None``
-    (the default) draws the heatmap with no overlay.
+    (the default) draws the heatmap with no overlay.  The payload's
+    ``iceberg_chains`` holds the lines one chain per iceberg
+    (:func:`iceberg_chains`).
+
+    ``color_limits`` is the volume range the colours span
+    (:func:`color_limits`).  With *price_by*, ``price_ticks`` are price axis
+    ticks *price_by* apart across ``y_range``; otherwise it is ``None``.
 
     A long quote line is thinned to *time_bins* time steps by
     :func:`thin_positions`; ``None`` keeps every row.  The payload's
@@ -1012,16 +1108,24 @@ def prepare_depth_heatmap_data(
             trades["price"] if trades is not None else None,
         )
 
+    price_ticks = None
+    if price_by is not None and y_range is not None:
+        ymin, ymax = y_range
+        price_ticks = np.arange(round(ymin), round(ymax) + price_by, price_by)
+
     return {
         "depth": depth_filtered,
         "spread": spread,
         "trades": trades,
         "show_mp": show_mp,
         "col_bias": col_bias,
+        "color_limits": color_limits(depth_filtered["volume"], col_bias),
         "price_by": price_by,
+        "price_ticks": price_ticks,
         "y_range": y_range,
         "notice": notice,
         "iceberg_lines": iceberg_lines,
+        "iceberg_chains": iceberg_chains(iceberg_lines),
         "iceberg_refills": iceberg_refills,
         "hidden_trades": hidden_trades,
         "thinned": thinned,
@@ -1151,6 +1255,10 @@ def prepare_order_activity_l2_data(
     and each spot keeps only its largest change of each side and action
     (:func:`thin_points`); ``None`` keeps every change.  The payload's
     ``thinned`` says how many changes were kept.
+
+    Each change has a ``marker_area``, its dot's area in points squared from
+    :func:`normalized_marker_areas`, and ``price_ticks`` holds the price axis
+    ticks (:func:`rounded_price_ticks`).
     """
     events = price_level_changes(depth)
     start_time, end_time = _default_start_end(events, start_time, end_time)
@@ -1178,16 +1286,28 @@ def prepare_order_activity_l2_data(
         bins=time_bins,
     )
 
+    # One size rule for the added and the removed dots, so they compare:
+    # linear up to the largest change, so the many small changes stay small.
+    events = events.assign(
+        marker_area=normalized_marker_areas(
+            events["volume"], lo=20.0, hi=200.0, ref_quantile=1.0
+        )
+    )
     created = events[events["action"] == "created"]
     deleted = events[events["action"] == "deleted"]
 
-    price_by, _ = _price_axis_breaks(events["price"].min(), events["price"].max())
+    price_lo, price_hi = events["price"].min(), events["price"].max()
+    price_by, _ = _price_axis_breaks(price_lo, price_hi)
+    price_ticks = (
+        rounded_price_ticks(price_lo, price_hi, price_by) if len(events) else None
+    )
 
     return {
         "events": events,
         "created": created,
         "deleted": deleted,
         "price_by": price_by,
+        "price_ticks": price_ticks,
         "thinned": thinned,
     }
 
@@ -1246,7 +1366,10 @@ def prepare_order_activity_l3_data(
     ``iceberg_lines``, ``iceberg_refills`` and ``hidden_trades`` are the
     optional hidden-liquidity overlay (see :func:`prepare_hidden_liquidity_overlay`),
     already clipped to the caller's display window. ``None``
-    (the default) draws the Gantt with no overlay.
+    (the default) draws the Gantt with no overlay.  The payload's
+    ``iceberg_chains`` holds the lines one chain per iceberg
+    (:func:`iceberg_chains`), and ``price_ticks`` the price axis ticks
+    (:func:`rounded_price_ticks`).
 
     *lifecycles* is ``order_lifecycles(events)`` when the caller already has
     it; ``None`` (the default) builds it here.
@@ -1314,15 +1437,19 @@ def prepare_order_activity_l3_data(
     else:
         spans = spans.assign(linewidth=1.0)
 
+    price_ticks = None if y_range is None else rounded_price_ticks(*y_range, price_by)
+
     return {
         "filled": spans[spans["fate"] == "filled"],
         "cancelled": spans[spans["fate"] == "cancelled"],
         "resting": spans[spans["fate"] == "resting"],
         "price_by": price_by,
+        "price_ticks": price_ticks,
         "y_range": y_range,
         "shown_of": shown_of,
         "show_markers": n_total <= marker_threshold,
         "iceberg_lines": iceberg_lines,
+        "iceberg_chains": iceberg_chains(iceberg_lines),
         "iceberg_refills": iceberg_refills,
         "hidden_trades": hidden_trades,
     }
@@ -1350,8 +1477,11 @@ def prepare_queue_position_data(
     :func:`~ob_analytics.analytics.set_order_types`) and carry ``fill``.
 
     Returns one frame per fate (``filled`` / ``cancelled`` / ``resting``) with
-    ``timestamp``, ``id``, ``rank``, ``age_s``, in time order; ``max_rank`` for the (inverted)
-    y-axis; and ``show_markers`` (terminal × / ○ only when few enough orders).
+    ``timestamp``, ``id``, ``rank``, ``age_s``, in time order; ``ends``, the
+    last row of each filled and each cancelled order (where its terminal
+    mark goes);
+    ``max_rank`` for the (inverted) y-axis; and ``show_markers`` (terminal
+    × / ○ only when few enough orders).
 
     With *time_bins*, each order's line is thinned to its lowest, highest
     and last rank in each of that many time steps (:func:`thin_order_lines`); ``None``
@@ -1383,10 +1513,14 @@ def prepare_queue_position_data(
     max_rank = int(q["rank"].max()) if not q.empty else 1
     show_markers = q["id"].nunique() <= marker_threshold
     q, thinned = thin_order_lines(q, y="rank", bins=time_bins)
+    fates = {fate: q[q["fate"] == fate] for fate in ("filled", "cancelled", "resting")}
     return {
-        "filled": q[q["fate"] == "filled"],
-        "cancelled": q[q["fate"] == "cancelled"],
-        "resting": q[q["fate"] == "resting"],
+        **fates,
+        # A still-resting order has no end mark.
+        "ends": {
+            fate: fates[fate].groupby("id", sort=False).tail(1)
+            for fate in ("filled", "cancelled")
+        },
         "max_rank": max_rank,
         "show_markers": show_markers,
         "thinned": thinned,
@@ -2014,6 +2148,7 @@ def prepare_cancellations_l3_data(
     age_floor_s: float = 1e-3,
     distance_floor_bps: float = 0.05,
     distance_cap_bps: float = 1_000.0,
+    bins: int = 30,
     *,
     lifecycles: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
@@ -2032,7 +2167,9 @@ def prepare_cancellations_l3_data(
     Both axes are heavy-tailed and span several orders of magnitude -- the
     latent populations (fleeting sub-100ms fishing at the touch, patient
     human-scale orders, deep orders pulled later) only separate on **log-log**
-    axes, so the face is a per-side density (hexbin), not a linear scatter.
+    axes, so the face is a per-side density, not a linear scatter: each side's
+    orders counted in a *bins* x *bins* grid of cells, evenly spaced on both
+    log axes and shared by the two sides.
     Instead of clipping the tails (which also clips the structure) the floors
     *age_floor_s* / *distance_floor_bps* keep instant cancels and at-touch
     placements on-scale (log cannot show zero).  *distance_cap_bps* drops only
@@ -2065,7 +2202,70 @@ def prepare_cancellations_l3_data(
 
     bids = cancels[cancels["direction"] == "bid"]
     asks = cancels[cancels["direction"] == "ask"]
-    return {"bids": bids, "asks": asks}
+    return {"bids": bids, "asks": asks, **_cancel_density(bids, asks, bins)}
+
+
+def _cancel_density(
+    bids: pd.DataFrame, asks: pd.DataFrame, bins: int
+) -> dict[str, Any]:
+    """Count the cancelled orders in a *bins* x *bins* grid of log age x log distance.
+
+    Both sides share the grid, so the two panels compare cell for cell.
+    ``age_edges`` and ``distance_edges`` are the cell edges in seconds and
+    bps, evenly spaced on a log scale.  ``bid_counts``, ``ask_counts`` and
+    ``counts`` (both sides together) are the counts, one row per distance
+    cell and one column per age cell, ``NaN`` where a cell holds no order.
+    ``count_range`` is the smallest and largest count of any cell of the
+    three grids, the range the colours span.  An order with an age or a
+    distance of zero has no place on a log axis and is not counted.  All are
+    ``None`` when no order is left to count.
+    """
+    empty: dict[str, Any] = {
+        "age_edges": None,
+        "distance_edges": None,
+        "bid_counts": None,
+        "ask_counts": None,
+        "counts": None,
+        "count_range": None,
+    }
+
+    def on_log_axes(side: pd.DataFrame) -> pd.DataFrame:
+        return side[(side["age_s"] > 0) & (side["distance_from_touch"] > 0)]
+
+    bids, asks = on_log_axes(bids), on_log_axes(asks)
+    both = pd.concat([bids, asks], ignore_index=True)
+    if both.empty:
+        return empty
+
+    def log_edges(values: pd.Series) -> np.ndarray:
+        logs = np.log10(values.to_numpy(dtype=float))
+        lo, hi = float(logs.min()), float(logs.max())
+        if not hi > lo:
+            lo, hi = lo - 0.5, hi + 0.5
+        return np.linspace(lo, hi, bins + 1)
+
+    age_edges = log_edges(both["age_s"])
+    distance_edges = log_edges(both["distance_from_touch"])
+
+    def grid(side: pd.DataFrame) -> np.ndarray:
+        counts, _, _ = np.histogram2d(
+            np.log10(side["age_s"].to_numpy(dtype=float)),
+            np.log10(side["distance_from_touch"].to_numpy(dtype=float)),
+            bins=[age_edges, distance_edges],
+        )
+        # Rows are distance cells, columns age cells: y by x, as drawn.
+        return counts.T
+
+    bid, ask = grid(bids), grid(asks)
+    total = bid + ask
+    return {
+        "age_edges": 10.0**age_edges,
+        "distance_edges": 10.0**distance_edges,
+        "bid_counts": np.where(bid == 0, np.nan, bid),
+        "ask_counts": np.where(ask == 0, np.nan, ask),
+        "counts": np.where(total == 0, np.nan, total),
+        "count_range": (1.0, float(total.max())),
+    }
 
 
 def _as_book_side_frame(side: pd.DataFrame) -> pd.DataFrame:
@@ -2173,8 +2373,8 @@ def book_mid(bids: pd.DataFrame, asks: pd.DataFrame) -> float | None:
 def book_bar_thickness(*sides: pd.DataFrame) -> float:
     """Smallest positive gap between distinct prices across *sides*.
 
-    Used as the ``book_snapshot`` ladder's bar thickness (price units) by
-    every backend; windowing to the touch keeps this gap roughly the tick
+    The ``book_snapshot`` payload's ``bar_thickness`` (price units), which
+    every backend draws the ladder's bars from; windowing to the touch keeps this gap roughly the tick
     size, so bars stay tall and contiguous.
     """
     arrays = [s["price"].to_numpy() for s in sides if not s.empty]
@@ -2237,7 +2437,8 @@ def prepare_book_snapshot_data(
     Returns ``bids``/``asks`` frames ordered best-first with columns ``price,
     volume, liquidity, seg_lo, seg_hi`` (sizes in the instrument's units),
     the same rows in rising price order as ``bid_curve``/``ask_curve`` for the
-    depth curve, the ``mid`` (see :func:`book_mid`), high-volume
+    depth curve, the ``mid`` (see :func:`book_mid`), the ladder's
+    ``bar_thickness`` (see :func:`book_bar_thickness`), high-volume
     ``*_quantiles`` price marks, ``timestamp``, and the ``per_order`` flag
     (``True`` at L3).
     """
@@ -2278,6 +2479,7 @@ def _book_snapshot(
         "bid_curve": bid_side.sort_values("price", kind="stable"),
         "ask_curve": ask_side.sort_values("price", kind="stable"),
         "mid": book_mid(bid_side, ask_side),
+        "bar_thickness": book_bar_thickness(bid_side, ask_side),
         "show_quantiles": show_quantiles,
         "per_order": per_order,
         "timestamp": timestamp,
@@ -2429,7 +2631,8 @@ def prepare_book_replay_data(
         ``trades`` (``timestamp``, ``price``, ``volume`` and ``direction``,
         from the first frame to the last), ``per_order`` (``True`` at L3),
         ``bar_thickness`` (one bar thickness for every frame, the smallest of
-        the frames' :func:`book_bar_thickness`) and
+        the frames' :func:`book_bar_thickness`), ``size_max`` (the longest
+        bar of any frame, so every frame shares one size axis) and
         ``view_range`` (``price_range`` widened by a bar thickness each side,
         so the bars at its edges are drawn whole; ``None`` with it).
 
@@ -2524,13 +2727,22 @@ def prepare_book_replay_data(
         for book in books
     ]
     # One thickness for every frame, so the bars keep one height as it plays.
-    thickness = min(
-        (book_bar_thickness(s["bids"], s["asks"]) for s in snapshots), default=1.0
+    thickness = min((s["bar_thickness"] for s in snapshots), default=1.0)
+    # One size scale for every frame, so bar lengths compare as it plays.
+    size_max = max(
+        (
+            float(side["seg_hi"].max())
+            for s in snapshots
+            for side in (s["bids"], s["asks"])
+            if not side.empty
+        ),
+        default=1.0,
     )
     return {
         "snapshots": snapshots,
         "price_range": price_range,
         "bar_thickness": thickness,
+        "size_max": size_max,
         "view_range": None
         if price_range is None
         else (price_range[0] - thickness, price_range[1] + thickness),
@@ -2691,6 +2903,12 @@ def prepare_events_histogram_data(
     the 1st-99th percentile of a heavy-tailed book still spans the far-from-
     touch cancelled orders, so the caller passes a mid-anchored focus window (the
     same one the depth heatmap uses) to keep the near-touch distribution legible.
+
+    The events are binned here, for every backend: ``edges`` are the bin
+    edges (of width *bw*, or a width chosen from the data when *bw* is
+    ``None``; see :func:`histogram_edges`), and ``bid_counts`` and
+    ``ask_counts`` the events of each side per bin, ``None`` for a side with
+    no events.  ``edges`` is ``None`` when no event is left.
     """
     resolve_level("events_histogram", level)
     if val not in ("volume", "price"):
@@ -2703,7 +2921,24 @@ def prepare_events_histogram_data(
         filtered = filtered[filtered["price"] >= price_from]
     if price_to is not None:
         filtered = filtered[filtered["price"] <= price_to]
-    return {"events": filtered, "val": val, "bw": bw}
+    edges = None
+    counts: dict[str, np.ndarray | None] = {"bid": None, "ask": None}
+    if not filtered.empty:
+        edges = histogram_edges(filtered[val].to_numpy(dtype=float), bw)
+        for direction in counts:
+            side = filtered.loc[filtered["direction"] == direction, val]
+            if len(side):
+                counts[direction], _ = np.histogram(
+                    side.to_numpy(dtype=float), bins=edges
+                )
+    return {
+        "events": filtered,
+        "val": val,
+        "bw": bw,
+        "edges": edges,
+        "bid_counts": counts["bid"],
+        "ask_counts": counts["ask"],
+    }
 
 
 #: The fewest trades a VPIN bucket or a trade-imbalance window needs
@@ -3140,17 +3375,27 @@ def _horizon_bands(imbalance: np.ndarray) -> dict[str, Any]:
 def prepare_kyle_lambda_data(
     kyle_result: KyleLambdaResult, *, level: Level | str | None = _UNSET
 ) -> dict[str, Any]:
-    """Prepare data for Kyle's Lambda regression scatter."""
+    """Prepare data for Kyle's Lambda regression scatter.
+
+    ``fit_line`` is a frame of the ``x`` and ``y`` of the fitted line across
+    the signed order flow, through the mean of the points with slope
+    ``lambda_``; it is ``None`` when there is no fit.
+    """
     resolve_level("kyle_lambda", level)
     reg_df = kyle_result.table
     lambda_ = kyle_result.lambda_
-    r_squared = kyle_result.r_squared
-    t_stat = kyle_result.t_stat
+    fit_line = None
+    if not np.isnan(lambda_) and not reg_df.empty:
+        flow = reg_df["signed_volume"]
+        x = np.linspace(flow.min(), flow.max(), 100)
+        intercept = reg_df["delta_price"].mean() - lambda_ * flow.mean()
+        fit_line = pd.DataFrame({"x": x, "y": intercept + lambda_ * x})
     return {
         "reg_df": reg_df,
         "lambda_": lambda_,
-        "r_squared": r_squared,
-        "t_stat": t_stat,
+        "r_squared": kyle_result.r_squared,
+        "t_stat": kyle_result.t_stat,
+        "fit_line": fit_line,
     }
 
 
@@ -3336,14 +3581,21 @@ def prepare_bars_data(
     The payload says which axis it built in ``x_axis`` (``"time"`` or
     ``"ordinal"``); ``x`` and ``bar_width`` are in that axis's own units, and
     ``ticks`` carries the ``(positions, labels)`` an ordinal axis needs.
+    ``volume_top`` is the top of the volume axis.
     """
     resolve_level("bars", level)
     label = label or bars_label(bars)
     closes = bars["timestamp_end"]
+    volume = bars["volume"].to_numpy(dtype=float)
     payload: dict[str, Any] = {
         "bars": bars,
         "label": label,
         "rising": (bars["close"] >= bars["open"]).to_numpy(),
+        # Four times the tallest bar: the volume strip reads as a footer
+        # under the candles rather than competing with them.
+        "volume_top": float(volume.max()) * 4
+        if volume.size and volume.max() > 0
+        else 1.0,
     }
 
     step = bars.attrs.get("bar_threshold")

@@ -28,11 +28,10 @@ from ob_analytics.visualization import _renderers
 from ob_analytics.visualization._data import (
     NO_DEPTH_NOTICE,
     biased_color_norm,
-    book_bar_thickness,
     check_book_payload_level,
     mpl_marker_area_to_plotly_size,
 )
-from ob_analytics.visualization._palette import Palette, iceberg_opacity
+from ob_analytics.visualization._palette import Palette
 from ob_analytics.visualization._theme import DEFAULT_THEME, PlotTheme
 
 L2, L3 = Level.L2, Level.L3
@@ -314,7 +313,7 @@ def bokeh_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     spread = data["spread"]
     trades = data["trades"]
     show_mp = data["show_mp"]
-    col_bias = data.get("col_bias", 1.0)
+    col_bias = data["col_bias"]
 
     fig = _base_figure(
         bpl,
@@ -328,7 +327,7 @@ def bokeh_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     if not depth.empty:
         vol = depth["volume"].fillna(0)
         color_t, tickvals, ticktext = _bokeh_color_field(
-            depth["volume"].to_numpy(), col_bias
+            depth["volume"].to_numpy(), col_bias, limits=data["color_limits"]
         )
         mapper = LinearColorMapper(palette=Viridis256, low=0.0, high=1.0)
         source = ColumnDataSource(
@@ -428,11 +427,14 @@ def bokeh_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
             )
 
     _bokeh_iceberg_overlay(
-        fig, data.get("iceberg_lines"), data.get("iceberg_refills"), pal
+        fig, data["iceberg_chains"], data.get("iceberg_refills"), pal
     )
     _bokeh_hidden_trades_overlay(fig, data.get("hidden_trades"), pal)
 
     _apply_y_range(fig, data.get("y_range"))
+    price_ticks = data["price_ticks"]
+    if price_ticks is not None:
+        fig.yaxis.ticker = FixedTicker(ticks=list(price_ticks))
 
     _maybe_legend(fig)
     return fig
@@ -444,22 +446,20 @@ def bokeh_depth_heatmap(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
 
 
 def _bokeh_iceberg_overlay(
-    fig: Any, lines: Any | None, refills: Any | None, pal: Palette
+    fig: Any, chains: list[dict[str, Any]], refills: Any | None, pal: Palette
 ) -> None:
     """Draw suspected-iceberg chains (opacity = confidence) + refill markers."""
     from bokeh.models import ColumnDataSource
 
-    if lines is not None and not lines.empty:
-        chains = [g for _, g in lines.groupby("iceberg", sort=False)]
+    if chains:
         source = ColumnDataSource(
             {
-                "xs": [g["timestamp"].to_numpy() for g in chains],
-                "ys": [g["price"].to_numpy() for g in chains],
+                "xs": [c["timestamp"].to_numpy() for c in chains],
+                "ys": [c["price"].to_numpy() for c in chains],
                 "color": [
-                    pal.bid if g["direction"].iloc[0] == "bid" else pal.ask
-                    for g in chains
+                    pal.bid if c["direction"] == "bid" else pal.ask for c in chains
                 ],
-                "alpha": [iceberg_opacity(g["confidence"].iloc[0]) for g in chains],
+                "alpha": [c["opacity"] for c in chains],
             }
         )
         fig.multi_line(
@@ -543,7 +543,7 @@ def _bokeh_book_bars(
         y_axis_label="Price",
     )
 
-    thickness = book_bar_thickness(bids, asks) * 0.9
+    thickness = data["bar_thickness"] * 0.9
     # White per-order separators (dark ones vanished against the fill).
     line_color = "white" if per_order else None
     line_width = 1.0 if per_order else 0.0
