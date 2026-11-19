@@ -304,7 +304,7 @@ class TestLoadResult:
         self, tmp_path: Path, lobster_day_dir, lobster_day_pipeline
     ):
         from ob_analytics.data import load_result
-        from ob_analytics.visualization.gallery import display_result
+        from ob_analytics.display import display_result
 
         result = lobster_day_pipeline.run(lobster_day_dir)
         assert result.config.lot_size == 1.0

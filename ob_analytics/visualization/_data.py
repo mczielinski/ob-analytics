@@ -39,7 +39,7 @@ from ob_analytics.flow_toxicity import (
     trade_imbalance_by_window,
 )
 from ob_analytics.protocols import Level
-from ob_analytics.schemas import validate_columns
+from ob_analytics.schemas import depth_bin_name, depth_bins, validate_columns
 from ob_analytics.visualization._palette import iceberg_opacity
 
 
@@ -2786,15 +2786,12 @@ def prepare_depth_bands_data(
         depth_summary["timestamp"] <= end_time
     )
     ob = depth_bands(depth_summary.loc[mask], interval=interval)
-    bps_levels = [
-        int(c.removeprefix("bid_vol").removesuffix("bps"))
-        for c in ob.columns
-        if c.startswith("bid_vol")
-    ]
+    bps_levels = [b.bps for b in depth_bins(ob.columns, "bid")]
 
+    # Zero-padded names, so the band labels sort in distance order.
     pad = max(3, len(str(bps_levels[-1])))
-    bid_names_fmt = [f"bid_vol{b:0{pad}d}bps" for b in bps_levels]
-    ask_names_fmt = [f"ask_vol{b:0{pad}d}bps" for b in bps_levels]
+    bid_names_fmt = [depth_bin_name("bid", f"{b:0{pad}d}") for b in bps_levels]
+    ask_names_fmt = [depth_bin_name("ask", f"{b:0{pad}d}") for b in bps_levels]
     ob.columns = pd.Index(["timestamp"] + bid_names_fmt + ask_names_fmt)
 
     max_ask = ob[ask_names_fmt].sum(axis=1).max()

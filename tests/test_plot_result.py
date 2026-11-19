@@ -9,10 +9,10 @@ import numpy as np
 import pytest
 
 from ob_analytics.depth import price_level_snapshots
+from ob_analytics.display import display_result
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import available_concepts, plot, plot_result, prepare
-from ob_analytics.visualization.gallery import display_result
 from tests._drawn import drawn
 
 

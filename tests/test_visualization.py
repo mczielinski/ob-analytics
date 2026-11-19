@@ -151,12 +151,12 @@ class TestFigureLayout:
         # warns and changes its subplot parameters.  (A face's colorbar may
         # still narrow the caller's panel; that is not a layout.)
         from ob_analytics.bitstamp import BitstampSource
+        from ob_analytics.display import display_result
         from ob_analytics.pipeline import Pipeline
         from ob_analytics.visualization import RENDERERS
         from ob_analytics.visualization.gallery import (
             _metric_cards,
             build_gallery_model,
-            display_result,
         )
 
         result = Pipeline(source=BitstampSource()).run(str(tiny_bitstamp_orders_csv))

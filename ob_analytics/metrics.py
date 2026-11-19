@@ -66,6 +66,7 @@ from ob_analytics.flow_toxicity import (
     vpin,
 )
 from ob_analytics.protocols import Level, Metric
+from ob_analytics.schemas import DEPTH_SUMMARY, SIZE
 
 __all__ = [
     "AmihudMetric",
@@ -545,7 +546,7 @@ class BookSignalsMetric:
             signals,
             summary,
             ("best_bid_price", "best_ask_price", "mid_price", "micro_price"),
-            tuple(c for c in signals.columns if "vol" in c),
+            DEPTH_SUMMARY.columns_of(signals.columns, SIZE),
             "book_signals",
         )
         frame.attrs["levels"] = imbalance_levels(summary, levels)

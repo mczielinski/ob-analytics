@@ -39,9 +39,9 @@ from ob_analytics._utils import (
     validate_non_empty,
 )
 from ob_analytics.capture_files import (
-    ORDER_COLUMNS,
+    ORDERS_CSV_COLUMNS,
     ORDERS_NAME,
-    TRADE_COLUMNS,
+    TRADES_CSV_COLUMNS,
     TRADES_NAME,
     csv_columns,
     record_format,
@@ -401,7 +401,7 @@ class BitstampTradeReader:
         columns = csv_columns(TRADES_NAME, capture_format.version)
         validate_columns(raw, set(columns), "BitstampTradeReader.load")
         # Read a format version 1 file under the current names.
-        raw = raw.rename(columns=dict(zip(columns, TRADE_COLUMNS, strict=True)))
+        raw = raw.rename(columns=dict(zip(columns, TRADES_CSV_COLUMNS, strict=True)))
         for column, what in (("price", "price"), ("volume", "size")):
             raw[column] = finite_floats(raw[column], what, where)
         # A trade with no known side or order (as this format's writer saves
@@ -705,7 +705,7 @@ class BitstampWriter:
             columns[SEQUENCE_COLUMN] = events[SEQUENCE_COLUMN].astype("Int64")
         if ORIGIN_COLUMN in events.columns:
             columns[ORIGIN_COLUMN] = events[ORIGIN_COLUMN]
-        out = pd.DataFrame(columns)[[c for c in ORDER_COLUMNS if c in columns]]
+        out = pd.DataFrame(columns)[[c for c in ORDERS_CSV_COLUMNS if c in columns]]
         p.parent.mkdir(parents=True, exist_ok=True)
         out.to_csv(p, index=False)
 
@@ -733,7 +733,7 @@ class BitstampWriter:
         re-read it.  An empty *trades* frame yields a header-only file.
         """
         if trades.empty:
-            pd.DataFrame(columns=list(TRADE_COLUMNS)).to_csv(dest, index=False)
+            pd.DataFrame(columns=list(TRADES_CSV_COLUMNS)).to_csv(dest, index=False)
             return
         side = trades["direction"].astype(str)
         buy_order_id = np.where(side == "buy", trades["taker"], trades["maker"])

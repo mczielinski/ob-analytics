@@ -91,11 +91,17 @@ ORIGIN_SNAPSHOT = SNAPSHOT_ORIGIN
 ORIGIN_STREAM = "stream"
 ORIGIN_SHUTDOWN = "shutdown"
 
+# The capture-file contracts.  A capture file is the raw input a loader reads,
+# not a table the package returns, so these columns differ from the table
+# contracts in ``ob_analytics.schemas.TABLES``: ``trades.csv`` has the
+# venue's trade and order ids where the trades table has event ids, and no
+# file has ``event_id`` or ``fill``.
+
 #: The columns of ``orders.csv``.  ``sequence`` is the venue's own number for
 #: the event when the source gives one (blank otherwise);
 #: :class:`~ob_analytics.bitstamp.BitstampLoader` reads it back for gap
 #: detection.
-ORDER_COLUMNS: tuple[str, ...] = (
+ORDERS_CSV_COLUMNS: tuple[str, ...] = (
     "id",
     "timestamp",
     "exchange_timestamp",
@@ -108,7 +114,7 @@ ORDER_COLUMNS: tuple[str, ...] = (
 )
 #: The columns of ``trades.csv``.  ``direction`` is the taker's side (``buy``
 #: or ``sell``) and ``volume`` the size traded.
-TRADE_COLUMNS: tuple[str, ...] = (
+TRADES_CSV_COLUMNS: tuple[str, ...] = (
     "trade_id",
     "timestamp",
     "exchange_timestamp",
@@ -123,7 +129,7 @@ TRADE_COLUMNS: tuple[str, ...] = (
 #: ``sequence`` is the venue's number for the book when the source gives one
 #: (blank otherwise).  ``timestamp`` is the receive time a replay sorts on;
 #: ``exchange_timestamp`` keeps the venue's time.
-DEPTH_COLUMNS: tuple[str, ...] = (
+DEPTH_CSV_COLUMNS: tuple[str, ...] = (
     "timestamp",
     "exchange_timestamp",
     "direction",
@@ -135,9 +141,9 @@ DEPTH_COLUMNS: tuple[str, ...] = (
 
 #: Each CSV file of a capture with its columns.
 CSV_FILES: dict[str, tuple[str, ...]] = {
-    ORDERS_NAME: ORDER_COLUMNS,
-    DEPTH_NAME: DEPTH_COLUMNS,
-    TRADES_NAME: TRADE_COLUMNS,
+    ORDERS_NAME: ORDERS_CSV_COLUMNS,
+    DEPTH_NAME: DEPTH_CSV_COLUMNS,
+    TRADES_NAME: TRADES_CSV_COLUMNS,
 }
 
 #: The format version 1 names of the columns version 2 renamed, per file, by
@@ -237,19 +243,19 @@ class FileCaptureSink:
         if level is Level.L2:
             self._depth_fp = _open_redacting(self.out_dir / DEPTH_NAME)
             self._depth = csv.DictWriter(
-                self._depth_fp, fieldnames=DEPTH_COLUMNS, extrasaction="ignore"
+                self._depth_fp, fieldnames=DEPTH_CSV_COLUMNS, extrasaction="ignore"
             )
             self._depth.writeheader()
         else:
             self._orders_fp = _open_redacting(self.out_dir / ORDERS_NAME)
             self._orders = csv.DictWriter(
-                self._orders_fp, fieldnames=ORDER_COLUMNS, extrasaction="ignore"
+                self._orders_fp, fieldnames=ORDERS_CSV_COLUMNS, extrasaction="ignore"
             )
             self._orders.writeheader()
 
         self._trades_fp = _open_redacting(self.out_dir / TRADES_NAME)
         self._trades = csv.DictWriter(
-            self._trades_fp, fieldnames=TRADE_COLUMNS, extrasaction="ignore"
+            self._trades_fp, fieldnames=TRADES_CSV_COLUMNS, extrasaction="ignore"
         )
         self._trades.writeheader()
 
@@ -282,7 +288,7 @@ class FileCaptureSink:
     def write_depth(self, event: EventDict) -> None:
         if self._depth is None:
             return
-        # Only the DEPTH_COLUMNS are persisted (extras ignored).
+        # Only the DEPTH_CSV_COLUMNS are persisted (extras ignored).
         if "depth" not in self._checked:
             self._check_keys("depth", event)
         self._depth.writerow(self._row(event))

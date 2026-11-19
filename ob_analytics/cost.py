@@ -63,7 +63,7 @@ from ob_analytics._utils import (
     window_start,
 )
 from ob_analytics.depth import _bid_ask_pair
-from ob_analytics.schemas import validate_columns
+from ob_analytics.schemas import COSTS, validate_columns
 from ob_analytics.trade_sign import (
     _MID_COLUMNS,
     mid_before,
@@ -82,21 +82,9 @@ __all__ = [
 #: Basis points in one, the scale every ``_bps`` column is written on.
 _BPS = 10_000.0
 
-#: Columns :func:`transaction_costs` returns, in order.
-COST_COLUMNS: tuple[str, ...] = (
-    "timestamp",
-    "price",
-    "volume",
-    "direction",
-    "mid_price",
-    "future_mid_price",
-    "effective_spread",
-    "realized_spread",
-    "price_impact",
-    "effective_spread_bps",
-    "realized_spread_bps",
-    "price_impact_bps",
-)
+#: Columns :func:`transaction_costs` returns, in order (the contract
+#: :data:`ob_analytics.schemas.TABLES` holds under ``"costs"``).
+COST_COLUMNS: tuple[str, ...] = COSTS.names
 
 
 @dataclass(frozen=True)

@@ -37,7 +37,7 @@ not lose them.
 shares or contracts elsewhere. A pipeline result stores sizes as whole lots
 (the size is `lots × lot_size`), and `vpin` reads the lot size from
 the trades' `attrs`, so `bucket_volume=0.5` means 0.5 BTC on `result.trades`
-and on [`display_result(result).trades`](../api/gallery.md#ob_analytics.visualization.gallery.display_result) alike.
+and on [`display_result(result).trades`](../api/schemas.md#ob_analytics.display.display_result) alike.
 Trades with integer sizes and no `attrs["lot_size"]` (a frame you built
 yourself) raise `ConfigError`: set the lot size on the frame, or pass float
 sizes. [Short captures](#short-captures) explains the 60. `vpin`

@@ -55,7 +55,7 @@ from ob_analytics._utils import (
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import BarRule
-from ob_analytics.schemas import validate_columns
+from ob_analytics.schemas import BARS, validate_columns
 from ob_analytics.trade_sign import resolve_direction
 
 __all__ = [
@@ -79,23 +79,9 @@ ENTRY_POINT_GROUP = "ob_analytics.bar_rules"
 #: called — the same arrangement as :data:`~ob_analytics.metrics.METRICS`.
 BAR_RULES: Registry[str, BarRule] = Registry("bar rule")
 
-#: The columns :func:`bars` returns, in order.
-BAR_COLUMNS: tuple[str, ...] = (
-    "bar",
-    "timestamp_start",
-    "timestamp_end",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "turnover",
-    "n_trades",
-    "vwap",
-    "buy_volume",
-    "sell_volume",
-    "signed_volume",
-)
+#: The columns :func:`bars` returns, in order (the contract
+#: :data:`ob_analytics.schemas.TABLES` holds under ``"bars"``).
+BAR_COLUMNS: tuple[str, ...] = BARS.names
 
 
 def register_bar_rule(rule: BarRule) -> None:
@@ -472,7 +458,7 @@ def bars(
     The output columns keep the units the trades arrive in: a pipeline
     result holds prices as whole ticks and sizes as whole lots, and so do its
     bars.  Convert the frame first (see
-    :func:`~ob_analytics.visualization.display_result`) for bars in the
+    :func:`~ob_analytics.display.display_result`) for bars in the
     quote currency and the instrument's units.  The threshold does not
     depend on this: it means the same amount on either frame.
 

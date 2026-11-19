@@ -21,8 +21,9 @@ order; an L2 run skips the two marked *(L3)*.
 
 ## Design decisions
 
-- **DataFrames end to end.** Pandas for speed; the column-list constants and
-  `validate_*` functions in `schemas.py` document the column contracts.
+- **DataFrames end to end.** Pandas for speed; `schemas.TABLES` holds one
+  contract per table the package returns, and the `validate_*` functions in
+  `schemas.py` check frames against them.
 - **The rebuild engine is separate, and holds no pandas.** `engine/` takes order
   events as numpy columns and returns book snapshots, order lifecycles, and queue
   positions -- nothing else. It knows nothing about analytics, plots, sources,
@@ -344,7 +345,8 @@ ob_analytics/
 ├── _registry.py          # Registry and load_plugins: the one lookup and plug-in loader every registry uses
 ├── config.py             # PipelineConfig, InstrumentGrid, SourceSettings, Credential (frozen Pydantic models)
 ├── protocols.py          # EventLoader, DepthLoader, TradeReader, DataWriter, Source, OfflineSource, RunContext, WindowedLoader
-├── schemas.py            # column constants, dtypes, unit metadata + validators (validate_events_df, …)
+├── schemas.py            # TABLES (one contract per table: columns, dtypes, price/size tags), unit metadata, validators
+├── display.py            # display_result: ticks and lots to display units, read from the contracts
 ├── exceptions.py         # ObAnalyticsError hierarchy
 ├── _secrets.py           # removes loaded credentials from files and logs
 ├── _quality_checks.py    # QualityCheck, Severity: the record of one data-quality check (quality re-exports them)
@@ -398,7 +400,7 @@ ob_analytics/
     ├── __init__.py       # plot() dispatcher, PlotTheme, save_figure, public re-exports
     ├── _concepts.py      # every plot concept, declared once: its levels and the backends that draw it
     ├── _renderers.py     # RENDERERS registry and loading of backend modules
-    ├── gallery.py        # plot_result, available_concepts, display_result, HTML gallery generation
+    ├── gallery.py        # plot_result, available_concepts, HTML gallery generation
     ├── prepare.py        # public data-preparation functions
     ├── _data.py          # Shared data prep for plot backends
     ├── _theme.py         # PlotTheme

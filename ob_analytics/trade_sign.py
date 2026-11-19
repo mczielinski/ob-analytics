@@ -907,7 +907,7 @@ def bulk_volume_classification(
         Total volume per bucket, in the instrument's own units (BTC, shares,
         contracts), whether ``trades["volume"]`` holds integer lots (with
         ``trades.attrs["lot_size"]``, as on a pipeline result) or display
-        sizes (see :func:`~ob_analytics.visualization.display_result`).
+        sizes (see :func:`~ob_analytics.display.display_result`).
     sigma : float, optional
         Standard deviation of bucketed price changes, in the quote currency
         whether ``trades["price"]`` holds integer ticks (with

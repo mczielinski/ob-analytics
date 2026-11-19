@@ -1262,7 +1262,7 @@ class TestDisplayUnitsPreserveFaces:
         self, fractional_bitstamp_orders_csv
     ) -> None:
         from ob_analytics.book import order_lifecycles
-        from ob_analytics.visualization.gallery import display_result
+        from ob_analytics.display import display_result
 
         result = self._result(fractional_bitstamp_orders_csv)
         canonical = order_lifecycles(result.events)
@@ -1277,8 +1277,8 @@ class TestDisplayUnitsPreserveFaces:
     def test_order_activity_l3_draws_the_same_spans(
         self, fractional_bitstamp_orders_csv
     ) -> None:
+        from ob_analytics.display import display_result
         from ob_analytics.visualization import prepare
-        from ob_analytics.visualization.gallery import display_result
 
         result = self._result(fractional_bitstamp_orders_csv)
         canonical = prepare.order_activity(result.events, level="L3")

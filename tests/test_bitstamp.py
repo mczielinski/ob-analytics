@@ -25,7 +25,7 @@ from ob_analytics.bitstamp import (
     BitstampWriter,
 )
 from ob_analytics.capture_files import (
-    ORDER_COLUMNS,
+    ORDERS_CSV_COLUMNS,
     ORIGIN_SHUTDOWN,
     ORIGIN_SNAPSHOT,
     ORIGIN_STREAM,
@@ -818,7 +818,7 @@ class TestBitstampWriter:
         )
         assert sorted(by_row(first)) == expected
         assert by_row(again) == by_row(first)
-        assert pd.read_csv(written).columns.tolist() == list(ORDER_COLUMNS)
+        assert pd.read_csv(written).columns.tolist() == list(ORDERS_CSV_COLUMNS)
 
     def test_writer_creates_file(self, tmp_path, result):
         target = BitstampWriter().write({"events": result.events}, tmp_path)

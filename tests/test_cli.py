@@ -853,8 +853,8 @@ class TestGallerySubcommand:
         import sys
 
         from ob_analytics import cli
+        from ob_analytics.display import display_result
         from ob_analytics.visualization import gallery
-        from ob_analytics.visualization.gallery import display_result
 
         out = tmp_path / "out"
         r = cli_runner(

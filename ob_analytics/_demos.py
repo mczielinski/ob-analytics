@@ -73,8 +73,9 @@ def _bars_cards(trades: pd.DataFrame) -> list[PlotSpec]:
     """Build the demo's bar cards: one cut by time, one by traded volume.
 
     The pair is the point of the card — the same trades cut two ways. *trades*
-    must already be in display units (see :func:`display_result`) so bar
-    prices read in the quote currency, like every other face in the gallery.
+    must already be in display units (see
+    :func:`~ob_analytics.display.display_result`) so bar prices read in the quote
+    currency, like every other face in the gallery.
     """
     if trades.empty:
         return []
@@ -94,7 +95,7 @@ def _lobster_analytics_cards(
 
     Trading halts draws trade price as a line with halt bands overlaid, so it
     needs the same display-unit trades as every other face in the gallery
-    (see :func:`display_result`).
+    (see :func:`~ob_analytics.display.display_result`).
     """
     cards: list[PlotSpec] = []
     if halts is not None and not halts.empty:

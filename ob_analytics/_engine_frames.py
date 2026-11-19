@@ -33,7 +33,7 @@ from ob_analytics.engine import (
     QueuePositions,
     crossed_prefix_counts,
 )
-from ob_analytics.schemas import HIDDEN_ORDER_ID
+from ob_analytics.schemas import HIDDEN_ORDER_ID, QUEUE
 
 TimestampLike = datetime | np.datetime64 | str | pd.Timestamp
 """What :func:`instant_ns` accepts as a snapshot instant."""
@@ -228,6 +228,8 @@ def crossed_touch_counts(
 
 # ── Results out ───────────────────────────────────────────────────────
 
+# The columns taken from the order's latest event.  The book contract
+# (``schemas.BOOK``) has these first, then the two the engine computes.
 BOOK_SIDE_ORDER_COLUMNS: tuple[str, ...] = (
     "id",
     "timestamp",
@@ -288,18 +290,7 @@ def lifecycles_frame(events: pd.DataFrame, lifecycles: OrderLifecycles) -> pd.Da
     return frame
 
 
-QUEUE_COLUMNS: tuple[str, ...] = (
-    "timestamp",
-    "id",
-    "direction",
-    "price",
-    "action",
-    "rank",
-    "queue_len",
-    "ahead_volume",
-    "remaining",
-    "age_s",
-)
+QUEUE_COLUMNS: tuple[str, ...] = QUEUE.names
 """Columns of a queue-position table, in order."""
 
 

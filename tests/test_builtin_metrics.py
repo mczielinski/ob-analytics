@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics import metrics
+from ob_analytics.display import display_result
 from ob_analytics.flow_toxicity import (
     kyle_lambda,
     trade_imbalance,
@@ -31,7 +32,6 @@ from ob_analytics.visualization._data import l1_card_texts
 from ob_analytics.visualization.gallery import (
     _metric_payload,
     build_gallery_model,
-    display_result,
 )
 from tests._drawn import drawn
 

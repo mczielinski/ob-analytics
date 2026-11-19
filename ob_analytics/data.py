@@ -742,7 +742,7 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     :class:`~ob_analytics.config.PipelineConfig`, which each Parquet file
     records.  A result rebuilt this way shows the same prices and sizes as
     the run did, for example in
-    :func:`~ob_analytics.visualization.display_result` or a gallery.
+    :func:`~ob_analytics.display.display_result` or a gallery.
 
     A folder that records only the tick and lot size (written by
     :meth:`~ob_analytics.pipeline.Pipeline.run_windows`, or by an older

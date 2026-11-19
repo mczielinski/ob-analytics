@@ -52,7 +52,6 @@ from ob_analytics._registry import Registry, load_plugins
 from ob_analytics.bars import bars
 from ob_analytics.depth import (
     _mid_price,
-    bin_volume_columns,
     book_imbalance,
     imbalance_levels,
     micro_price,
@@ -60,7 +59,7 @@ from ob_analytics.depth import (
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Feature
-from ob_analytics.schemas import validate_columns
+from ob_analytics.schemas import depth_bins, validate_columns
 
 __all__ = [
     "DepthFeature",
@@ -432,7 +431,7 @@ class DepthFeature:
 
 def _side_depth(frame: pd.DataFrame, side: str) -> np.ndarray:
     """Total resting size on *side* across the depth bins, or at the touch."""
-    bins = bin_volume_columns(frame, side)
+    bins = [b.column for b in depth_bins(frame.columns, side)]
     if not bins:
         return frame[f"best_{side}_vol"].to_numpy(dtype=float)
     return frame[bins].to_numpy(dtype=float).sum(axis=1)
