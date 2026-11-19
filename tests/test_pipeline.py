@@ -266,8 +266,8 @@ def test_pipeline_result_is_slim(tmp_path: Path):
     """PipelineResult carries only the core tables plus config, level and
     declarations.
 
-    Analytic outputs (VPIN/OFI/Kyle's λ) and the old metadata/extras/metrics
-    bags are gone — compute them post-pipeline from ``result.trades``.
+    Analytic outputs (VPIN/trade imbalance/Kyle's λ) and the old
+    metadata/extras/metrics bags are gone — compute them post-pipeline from ``result.trades``.
     ``level`` records which order-book level the run was produced at (L2 vs L3),
     and ``declarations`` what the run's data is declared to show.
     """

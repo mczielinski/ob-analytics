@@ -27,8 +27,8 @@ from ob_analytics.cost import amihud, roll_spread, transaction_costs
 from ob_analytics.depth import book_signals
 from ob_analytics.flow_toxicity import (
     kyle_lambda,
-    ofi_by_window,
-    order_flow_imbalance,
+    trade_imbalance,
+    trade_imbalance_by_window,
     vpin,
 )
 from ob_analytics.pipeline import PipelineResult
@@ -55,8 +55,8 @@ def _kyle(run: PipelineResult) -> pd.DataFrame:
     return fit.table.assign(lambda_=fit.lambda_)
 
 
-def _ofi(run: PipelineResult) -> pd.DataFrame:
-    return order_flow_imbalance(run.trades, quotes=run.depth_summary)
+def _imbalance(run: PipelineResult) -> pd.DataFrame:
+    return trade_imbalance(run.trades, quotes=run.depth_summary)
 
 
 def _l1(run: PipelineResult) -> pd.DataFrame:
@@ -71,8 +71,10 @@ BARE: dict[str, Callable[[PipelineResult], pd.DataFrame]] = {
     "book_signals": lambda run: book_signals(run.depth_summary),
     "vpin": lambda run: vpin(run.trades, quotes=run.depth_summary).table,
     "kyle_lambda": _kyle,
-    "order_flow_imbalance": _ofi,
-    "ofi_by_window": lambda run: ofi_by_window(run.trades, quotes=run.depth_summary),
+    "trade_imbalance": _imbalance,
+    "trade_imbalance_by_window": lambda run: trade_imbalance_by_window(
+        run.trades, quotes=run.depth_summary
+    ),
     "transaction_costs": lambda run: transaction_costs(run.trades, run.depth_summary),
     "amihud": lambda run: amihud(run.trades),
     "roll_spread": lambda run: roll_spread(run.trades),
@@ -190,7 +192,7 @@ def test_measures_are_in_the_quote_currency_and_btc(
     turnover = (shown.trades["price"] * shown.trades["volume"]).sum()
     assert illiq["turnover"].iloc[0] == pytest.approx(turnover)
 
-    ofi = bundled_sample_result.metric("order_flow_imbalance")
-    assert ofi["buy_volume"].sum() == pytest.approx(
+    imbalance = bundled_sample_result.metric("trade_imbalance")
+    assert imbalance["buy_volume"].sum() == pytest.approx(
         shown.trades.loc[shown.trades["direction"] == "buy", "volume"].sum()
     )

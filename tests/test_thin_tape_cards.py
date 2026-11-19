@@ -1,7 +1,7 @@
 """Cards that a thin tape or a single window made unreadable (issue #497).
 
 Book signals takes its price range from readable quotes only.  Roll and
-Amihud show a single window as a number.  VPIN and order flow imbalance
+Amihud show a single window as a number.  VPIN and trade imbalance
 draw only buckets or windows with enough trades, and say so otherwise.
 """
 
@@ -200,29 +200,29 @@ class TestVpinNeedsEnoughTrades:
         assert payload["too_few"].startswith("Too few taker orders")
 
 
-# ── Order flow imbalance: enough trades per window ───────────────────
+# ── Trade imbalance: enough trades per window ────────────────────────
 
 
-def _ofi(n_trades: list[int]) -> pd.DataFrame:
+def _imbalance(n_trades: list[int]) -> pd.DataFrame:
     n = len(n_trades)
     return pd.DataFrame(
         {
             "timestamp": pd.date_range("2020-01-01", periods=n, freq="1min"),
             "n_trades": n_trades,
-            "ofi": np.linspace(-0.5, 0.5, n),
+            "trade_imbalance": np.linspace(-0.5, 0.5, n),
         }
     )
 
 
 class TestImbalanceNeedsEnoughTrades:
     def test_thin_windows_are_left_out_and_counted(self) -> None:
-        payload = prepare.order_flow_imbalance(_ofi([2, MIN_TRADES, 30, 1]))
-        assert list(payload["ofi_df"]["n_trades"]) == [MIN_TRADES, 30]
+        payload = prepare.trade_imbalance(_imbalance([2, MIN_TRADES, 30, 1]))
+        assert list(payload["imbalance_df"]["n_trades"]) == [MIN_TRADES, 30]
         assert payload["notice"] == (
             f"2 of 4 windows left out: fewer than {MIN_TRADES} trades each"
         )
         assert payload["too_few"] == ""
-        fig = plot("order_flow_imbalance", backend="matplotlib", **payload)
+        fig = plot("trade_imbalance", backend="matplotlib", **payload)
         assert drawn(fig)["rectangle"] == 2
 
     @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
@@ -230,9 +230,9 @@ class TestImbalanceNeedsEnoughTrades:
         # The kept windows are three minutes apart; each is one minute long.
         if backend == "plotly":
             pytest.importorskip("plotly")
-        payload = prepare.order_flow_imbalance(_ofi([30, 1, 1, 30]))
+        payload = prepare.trade_imbalance(_imbalance([30, 1, 1, 30]))
         assert payload["bar_gap"] == pd.Timedelta("1min")
-        fig = plot("order_flow_imbalance", backend=backend, **payload)
+        fig = plot("trade_imbalance", backend=backend, **payload)
         if backend == "matplotlib":
             widths = [p.get_width() for p in fig.axes[0].patches]
             assert widths == pytest.approx([0.8 / (24 * 60)] * 2)
@@ -240,8 +240,8 @@ class TestImbalanceNeedsEnoughTrades:
             assert fig.data[0].width == pytest.approx(48_000)
 
     def test_no_window_with_enough_trades_gives_a_message(self) -> None:
-        payload = prepare.order_flow_imbalance(_ofi([2, 3, 1]))
-        assert payload["ofi_df"].empty
+        payload = prepare.trade_imbalance(_imbalance([2, 3, 1]))
+        assert payload["imbalance_df"].empty
         assert payload["too_few"].startswith("Too few trades")
 
     @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
@@ -250,8 +250,8 @@ class TestImbalanceNeedsEnoughTrades:
     ) -> None:
         if backend == "plotly":
             pytest.importorskip("plotly")
-        payload = prepare.order_flow_imbalance(_ofi([2, 3, 1]))
-        fig = plot("order_flow_imbalance", backend=backend, **payload)
+        payload = prepare.trade_imbalance(_imbalance([2, 3, 1]))
+        fig = plot("trade_imbalance", backend=backend, **payload)
         assert not drawn(fig)
         text = _mpl_text(fig) if backend == "matplotlib" else _plotly_text(fig)
         assert "Too few trades" in text
@@ -259,8 +259,8 @@ class TestImbalanceNeedsEnoughTrades:
     def test_the_sample_card_draws_only_full_windows(
         self, bundled_sample_result
     ) -> None:
-        payload = _card(bundled_sample_result, "order_flow_imbalance")
-        kept = payload["ofi_df"]
+        payload = _card(bundled_sample_result, "trade_imbalance")
+        kept = payload["imbalance_df"]
         assert not kept.empty
         assert (kept["n_takers"] >= MIN_TRADES).all()
         assert "windows left out" in payload["notice"]

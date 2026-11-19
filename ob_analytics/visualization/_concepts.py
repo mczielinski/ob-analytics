@@ -414,9 +414,9 @@ def _liquidity_at_touch_l3(s: Scene) -> Binding:
     )
 
 
-def _volume_percentiles(s: Scene) -> Binding:
+def _depth_bands(s: Scene) -> Binding:
     return _bound(
-        _data.prepare_volume_percentiles_data,
+        _data.prepare_depth_bands_data,
         depth_summary=s.depth_summary,
         start_time=s.summary_start,
         end_time=s.summary_end,
@@ -550,7 +550,7 @@ CONCEPTS: tuple[Concept, ...] = (
         "removed from (outlined dot) each price level, at its price, from the "
         "depth table; a removal can be a cancel or a fill. L3: each order is "
         "one lifespan from placement to "
-        "outcome - orange = pulled (flashed), green = rested/filled. L3 also "
+        "outcome - orange = pulled (cancelled), green = rested/filled. L3 also "
         "overlays iceberg refills and trades against hidden orders.",
     ),
     Concept(
@@ -664,15 +664,15 @@ CONCEPTS: tuple[Concept, ...] = (
         "that rank; pale = recent churn, dark = sticky liquidity.",
     ),
     Concept(
-        "volume_percentiles",
+        "depth_bands",
         {
             L2: Face(
                 _MPL_PLOTLY,
                 Needs(("depth_summary",)),
-                _volume_percentiles,
+                _depth_bands,
             )
         },
-        "Volume Percentiles",
+        "Depth Bands",
         "Book depth through time, stacked by distance from the touch in bps "
         "bands: asks above zero, bids below; band thickness = resting volume "
         "in that bps ring.",
@@ -733,9 +733,9 @@ CONCEPTS: tuple[Concept, ...] = (
             "book_signals",
             "bars",
             "vpin",
-            "order_flow_imbalance",
+            "trade_imbalance",
             "transaction_costs",
-            "ofi_by_window",
+            "trade_imbalance_by_window",
             "kyle_lambda",
             "trading_halts",
             "amihud",

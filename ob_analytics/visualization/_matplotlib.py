@@ -1723,12 +1723,12 @@ def mpl_trade_tape_per_order(
     return fig
 
 
-@renders("volume_percentiles", L2)
+@renders("depth_bands", L2)
 @_themed
-def mpl_volume_percentiles(
+def mpl_depth_bands(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """Render volume-percentile stacked area chart."""
+    """Render depth-band stacked area chart."""
     pal = theme.palette
     asks_cumsum = data["asks_cumsum"]
     bids_cumsum_neg = data["bids_cumsum_neg"]
@@ -1746,7 +1746,7 @@ def mpl_volume_percentiles(
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(12, 8))
     if asks_cumsum.empty:
-        ax.set_title("Volume Percentiles (no data)")
+        ax.set_title("Depth Bands (no data)")
         return fig
 
     # Plot date2num floats (not the DatetimeIndex) so the axis stays off
@@ -2060,36 +2060,39 @@ def mpl_transaction_costs(
     return fig
 
 
-@renders("order_flow_imbalance", None)
+@renders("trade_imbalance", None)
 @_themed
-def mpl_order_flow_imbalance(
+def mpl_trade_imbalance(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """Render order flow imbalance bar chart."""
+    """Render trade imbalance bar chart."""
     pal = theme.palette
-    ofi_df = data["ofi_df"]
+    imbalance_df = data["imbalance_df"]
     trades = data["trades"]
     too_few = data.get("too_few")
-    if too_few or ofi_df.empty:
+    if too_few or imbalance_df.empty:
         # An empty datetime column makes ax.bar raise: write why instead.
         fig, ax = _create_axes(ax, figsize=(12, 5))
         ax.set_axis_off()
-        ax.set_title("Order Flow Imbalance")
+        ax.set_title("Trade Imbalance")
         _draw_notice(ax, too_few or "No windows to draw.", pal)
         return fig
-    # Buy pressure (OFI >= 0) in the buy colour, sell pressure in the sell colour.
-    colors = np.where(ofi_df["ofi"].to_numpy() >= 0, pal.buy, pal.sell)
+    # Buy pressure (trade imbalance >= 0) in the buy colour, sell pressure in
+    # the sell colour.
+    colors = np.where(
+        imbalance_df["trade_imbalance"].to_numpy() >= 0, pal.buy, pal.sell
+    )
 
     # Bar width in matplotlib date-number units (days): 80% of the median
     # inter-bar gap. Computed here because it is backend-specific to the
     # date-number x-axis.
     median_gap = data.get("bar_gap")
-    if median_gap is None and len(ofi_df) > 1:
-        median_gap = ofi_df["timestamp"].diff().median()
+    if median_gap is None and len(imbalance_df) > 1:
+        median_gap = imbalance_df["timestamp"].diff().median()
     if median_gap is not None:
         bar_width = mdates.date2num(
-            ofi_df["timestamp"].iloc[0] + median_gap * 0.8
-        ) - mdates.date2num(ofi_df["timestamp"].iloc[0])
+            imbalance_df["timestamp"].iloc[0] + median_gap * 0.8
+        ) - mdates.date2num(imbalance_df["timestamp"].iloc[0])
     else:
         bar_width = 0.001
 
@@ -2097,8 +2100,8 @@ def mpl_order_flow_imbalance(
     fig, ax = _create_axes(ax, figsize=(12, 5))
 
     ax.bar(
-        ofi_df["timestamp"],
-        ofi_df["ofi"],
+        imbalance_df["timestamp"],
+        imbalance_df["trade_imbalance"],
         width=bar_width,
         color=colors,
         alpha=0.7,
@@ -2109,8 +2112,8 @@ def mpl_order_flow_imbalance(
     ax.axhline(y=0, color=pal.rule, linewidth=0.8, alpha=0.6)
     ax.set_ylim(-1.05, 1.05)
     ax.set_xlabel("Time")
-    ax.set_ylabel("OFI")
-    _set_title(ax, "Order Flow Imbalance", data.get("notice"), pal)
+    ax.set_ylabel("Trade imbalance")
+    _set_title(ax, "Trade Imbalance", data.get("notice"), pal)
     format_time_axis(ax)
 
     if trades is not None and "price" in trades.columns:
@@ -2131,27 +2134,28 @@ def mpl_order_flow_imbalance(
     return fig
 
 
-@renders("ofi_by_window", None)
+@renders("trade_imbalance_by_window", None)
 @_themed
-def mpl_ofi_by_window(
+def mpl_trade_imbalance_by_window(
     data: dict, ax: Axes | None = None, *, theme: PlotTheme = DEFAULT_THEME
 ) -> Figure:
-    """Order-flow-imbalance horizon graph: OFI over several trailing windows, stacked.
+    """Trade-imbalance horizon graph: several trailing windows, stacked.
 
     A *horizon graph* -- each window is a row that fills from its own
     baseline in the theme's buy / sell colours (net buy / net sell), with both
     fill height and colour saturation (three overlaid bands) growing with the
-    size of the imbalance.  OFI is already bounded to ``[-1, +1]``, so every
-    row shares one scale: short rows are jumpy (fleeting pressure), long rows
-    smooth (persistent pressure), readable in a single compact panel.
+    size of the imbalance.  Trade imbalance is already bounded to
+    ``[-1, +1]``, so every row shares one scale: short rows are jumpy (fleeting
+    pressure), long rows smooth (persistent pressure), readable in a single
+    compact panel.
     """
     pal = theme.palette
     own_figure = ax is None
     fig, ax = _create_axes(ax, figsize=(11, 4.2))
-    ofi = data["ofi"]
+    imbalance = data["trade_imbalance"]
     windows = data["windows"]
-    if np.isnan(ofi).all():
-        ax.set_title("Order flow imbalance — horizon graph (no data)")
+    if np.isnan(imbalance).all():
+        ax.set_title("Trade imbalance — horizon graph (no data)")
         return fig
 
     x = mdates.date2num(pd.to_datetime(data["times"]))
@@ -2192,7 +2196,7 @@ def mpl_ofi_by_window(
     ax.set_xlim(x[0] - pad, x[-1] + pad)
     format_time_axis(ax)
     ax.set_xlabel("Time")
-    ax.set_title("Order flow imbalance — horizon graph (buy + / sell −)")
+    ax.set_title("Trade imbalance — horizon graph (buy + / sell −)")
     if own_figure:
         fig.tight_layout()
     return fig

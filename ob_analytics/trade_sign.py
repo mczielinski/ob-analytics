@@ -6,7 +6,7 @@ resolves maker vs taker and the trades frame carries a real ``direction``
 (the taker's aggressor side).  **L2 / aggregated feeds don't label the
 aggressor side** — and many CCXT sources don't either — so signed-flow
 analytics (:func:`~ob_analytics.flow_toxicity.vpin`,
-:func:`~ob_analytics.flow_toxicity.order_flow_imbalance`) have nothing to
+:func:`~ob_analytics.flow_toxicity.trade_imbalance`) have nothing to
 work with.
 
 This module adds the three standard trade-sign classifiers so signed-flow
@@ -25,7 +25,7 @@ analytics work on every feed:
 
 :func:`classify_trade_sign` is the per-trade entry point (tick / Lee–Ready);
 :func:`~ob_analytics.flow_toxicity.vpin` and
-:func:`~ob_analytics.flow_toxicity.order_flow_imbalance` call it as a
+:func:`~ob_analytics.flow_toxicity.trade_imbalance` call it as a
 fallback when the trades frame has no native ``direction``.
 
 Sign convention (matching the pipeline's trades ``direction``): ``+1`` /

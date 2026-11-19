@@ -119,11 +119,11 @@ class TestEdgeCases:
                 (5, 2, 100.0, 50.0, "deleted", 0.0, "bid"),
             ]
         )
-        ev["type"] = "flashed-limit"
+        ev["type"] = "cancelled-limit"
         ev["aggressiveness_bps"] = [4.2, float("nan")]
         life = order_lifecycles(ev)
         row = life.set_index("id").loc[5]
-        assert row["type"] == "flashed-limit"
+        assert row["type"] == "cancelled-limit"
         assert row["aggressiveness_bps"] == pytest.approx(4.2)
 
 

@@ -51,15 +51,15 @@ class TestSetOrderTypes:
         result = set_order_types(events, trades)
         assert (result[result["id"] == 10]["type"] == "resting-limit").all()
 
-    def test_flashed_limit(self):
-        """Created + deleted with identical volume, no fills → 'flashed-limit'."""
+    def test_cancelled_limit(self):
+        """Created + deleted with identical volume, no fills → 'cancelled-limit'."""
         events = _events(
             (1, 10, "created", "bid", 100, 5),
             (2, 10, "deleted", "bid", 100, 5),  # same volume
         )
         trades = _trades()  # no trades
         result = set_order_types(events, trades)
-        assert (result[result["id"] == 10]["type"] == "flashed-limit").all()
+        assert (result[result["id"] == 10]["type"] == "cancelled-limit").all()
 
     def test_price_modified_order_no_longer_special_cased(self):
         """An order whose price changes mid-life is classified by maker/taker
@@ -97,7 +97,7 @@ class TestSetOrderTypes:
         """Order that doesn't fit patterns stays 'unknown'."""
         events = _events(
             (1, 10, "created", "bid", 100, 5),
-            (2, 10, "deleted", "bid", 100, 3),  # different volume → not flashed
+            (2, 10, "deleted", "bid", 100, 3),  # volume changed → not cancelled-limit
         )
         trades = _trades()  # no trades → not market/maker/taker
         # The package's loguru logger stays off, so the user hears of the

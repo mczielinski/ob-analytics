@@ -34,8 +34,8 @@ goes to `compute` or `prepare`, whichever names it.
 | `book_signals` | Mid, micro-price and order-book imbalance | [`book_signals`](depth.md) |
 | `vpin` | VPIN per volume bucket | [`vpin`](flow_toxicity.md) |
 | `kyle_lambda` | Kyle's λ regression | [`kyle_lambda`](flow_toxicity.md) |
-| `order_flow_imbalance` | Order flow imbalance per window | [`order_flow_imbalance`](flow_toxicity.md) |
-| `ofi_by_window` | Order flow imbalance over several windows | [`ofi_by_window`](flow_toxicity.md) |
+| `trade_imbalance` | Trade imbalance per window | [`trade_imbalance`](flow_toxicity.md) |
+| `trade_imbalance_by_window` | Trade imbalance over several windows | [`trade_imbalance_by_window`](flow_toxicity.md) |
 | `transaction_costs` | Effective and realized spread and price impact per trade | [`transaction_costs`](cost.md) |
 | `amihud` | Amihud illiquidity per window | [`amihud`](cost.md) |
 | `roll_spread` | Roll's implied spread per window | [`roll_spread`](cost.md) |
@@ -61,9 +61,9 @@ units and a price in the quote currency, so
 
 ::: ob_analytics.metrics.KyleLambdaMetric
 
-::: ob_analytics.metrics.OrderFlowImbalanceMetric
+::: ob_analytics.metrics.TradeImbalanceMetric
 
-::: ob_analytics.metrics.OfiByWindowMetric
+::: ob_analytics.metrics.TradeImbalanceByWindowMetric
 
 ::: ob_analytics.metrics.TransactionCostsMetric
 

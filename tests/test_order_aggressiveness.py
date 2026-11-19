@@ -63,8 +63,8 @@ class TestOrderAggressiveness:
         """A bid priced below the best bid → negative aggressiveness."""
         events, depth = _make_events_and_depth(
             [
-                (1, "bid", "created", "flashed-limit", "2015-01-01 00:00:01", 100),
-                (2, "bid", "created", "flashed-limit", "2015-01-01 00:00:02", 95),
+                (1, "bid", "created", "cancelled-limit", "2015-01-01 00:00:01", 100),
+                (2, "bid", "created", "cancelled-limit", "2015-01-01 00:00:02", 95),
             ],
             [
                 (1, "2015-01-01 00:00:01", 100, 110),
@@ -82,8 +82,8 @@ class TestOrderAggressiveness:
                 # Seed depth event
                 (1, "bid", "created", "resting-limit", "2015-01-01 00:00:01", 100),
                 # Two bids in the same millisecond burst
-                (2, "bid", "created", "flashed-limit", "2015-01-01 00:00:02", 105),
-                (3, "bid", "created", "flashed-limit", "2015-01-01 00:00:02", 104),
+                (2, "bid", "created", "cancelled-limit", "2015-01-01 00:00:02", 105),
+                (3, "bid", "created", "cancelled-limit", "2015-01-01 00:00:02", 104),
             ],
             [
                 (1, "2015-01-01 00:00:01", 100, 110),

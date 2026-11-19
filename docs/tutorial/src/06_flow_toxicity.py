@@ -114,33 +114,33 @@ ax.set_title("The reference tape — informed accumulation shaded")
 # Thirteen trades: four calm, five in the shaded accumulation, four calm
 # again. Three buckets, three metrics, one tape.
 #
-# ## Order flow imbalance: the direction of the flow
+# ## Trade imbalance: the direction of the flow
 #
 # The simplest measure. Over a time window, net the buy and sell volume and
 # normalise:
 #
 # ```
-#            buy volume − sell volume
-#   OFI  =  ─────────────────────────
-#            buy volume + sell volume
+#                         buy volume − sell volume
+#   trade imbalance  =  ────────────────────────
+#                         buy volume + sell volume
 # ```
 #
-# **In one sentence:** OFI is which way the flow leaned, on a scale from
-# −1 (everyone sold) through 0 (balanced) to +1 (everyone bought). It is
+# **In one sentence:** trade imbalance is which way the flow leaned, on a
+# scale from −1 (everyone sold) through 0 (balanced) to +1 (everyone bought). It is
 # the short-horizon pressure on price, and it is a simpler relative of
 # the order-book event imbalance studied by Cont, Kukanov and Stoikov
 # (2014). On the tape, in 30-second windows:
 
 # %%
-from ob_analytics.flow_toxicity import order_flow_imbalance
+from ob_analytics.flow_toxicity import trade_imbalance
 
-ofi = order_flow_imbalance(tape, window="30s")
-ofi[["timestamp", "buy_volume", "sell_volume", "ofi"]]
+imbalance = trade_imbalance(tape, window="30s")
+imbalance[["timestamp", "buy_volume", "sell_volume", "trade_imbalance"]]
 
 # %% [markdown]
 # Read it against the tape above: the two calm-open windows are +0.33
 # and −1.0 (small, mixed), the two accumulation windows peg at **+1.0**
-# (buys only), and the calm close settles back to 0.0. The `ofi` face
+# (buys only), and the calm close settles back to 0.0. The `trade_imbalance` face
 # draws exactly this, the tape on top and the imbalance bars below —
 # note how the bars swell and turn one-sided precisely under the shaded
 # region:
@@ -148,12 +148,12 @@ ofi[["timestamp", "buy_volume", "sell_volume", "ofi"]]
 # %%
 from ob_analytics.visualization import plot, prepare
 
-fig = plot("order_flow_imbalance", **prepare.order_flow_imbalance(ofi, trades=tape))
+fig = plot("trade_imbalance", **prepare.trade_imbalance(imbalance, trades=tape))
 
 # %% [markdown]
 # ## VPIN: imbalance on a volume clock
 #
-# OFI slices time into equal *minutes*. VPIN — Volume-Synchronised
+# Trade imbalance slices time into equal *minutes*. VPIN — Volume-Synchronised
 # Probability of Informed Trading — slices into equal *volume* instead,
 # which is the key idea. Markets trade in bursts; a **volume clock**
 # ticks fast when trading is frenzied and slow when it
@@ -193,7 +193,7 @@ fig = plot("vpin", **prepare.vpin(fit, threshold=0.7))
 # %% [markdown]
 # ## Kyle's λ: the price of a unit of flow
 #
-# OFI and VPIN measure *imbalance*. Kyle's λ measures its *consequence*:
+# Trade imbalance and VPIN measure *imbalance*. Kyle's λ measures its *consequence*:
 # how far the price moves per unit of net order flow. Over each window,
 # take the price change and the signed volume, then fit a line across
 # all windows:
@@ -317,7 +317,7 @@ for reason in vpin_real.diagnostics:
 #     over too few buckets to mean much. Read `significant` and
 #     `diagnostics` on the λ result and on the VPIN result before the
 #     number. **(2) The knobs move the
-#     answer:** `bucket_volume` for VPIN and `window` for Kyle and OFI
+#     answer:** `bucket_volume` for VPIN and `window` for Kyle and trade imbalance
 #     are not neutral defaults — halve the bucket size and VPIN's whole
 #     profile shifts. Choose them from the instrument's typical volume
 #     (`vpin_bucket_volume` applies the average daily volume ÷ 50 rule),
@@ -341,8 +341,8 @@ for reason in vpin_real.diagnostics:
 fig = result.plot("kyle_lambda")  # the same fit as kyle_real above
 
 # %% [markdown]
-# The flow names are `vpin`, `kyle_lambda`, `order_flow_imbalance` and
-# `ofi_by_window`; `transaction_costs`, `amihud` and `roll_spread` measure
+# The flow names are `vpin`, `kyle_lambda`, `trade_imbalance` and
+# `trade_imbalance_by_window`; `transaction_costs`, `amihud` and `roll_spread` measure
 # cost, and `l1_ticker` and `book_signals` read the quote. Each reports in
 # the instrument's own units, so `result.metric(name)`, `result.plot(name)`
 # and the bare function give the same numbers.
@@ -429,5 +429,5 @@ assert by_size["peak vpin_avg"].tolist() == [1.0, 0.833, 0.625]
 # *Vocabulary introduced here — flow toxicity, informed trading,
 # [VPIN](../glossary.md#flow-toxicity),
 # [Kyle's lambda](../glossary.md#flow-toxicity),
-# [order flow imbalance](../glossary.md#flow-toxicity), volume clock —
+# [trade imbalance](../glossary.md#flow-toxicity), volume clock —
 # lives in the [Glossary](../glossary.md).*

@@ -22,6 +22,7 @@ from ob_analytics.visualization._plotly import (
     plotly_book_snapshot_aggregate,
     plotly_book_snapshot_per_order,
     plotly_cancellations_per_order,
+    plotly_depth_bands,
     plotly_depth_chart_aggregate,
     plotly_depth_chart_per_order,
     plotly_depth_heatmap,
@@ -29,15 +30,14 @@ from ob_analytics.visualization._plotly import (
     plotly_kyle_lambda,
     plotly_liquidity_at_touch_aggregate,
     plotly_liquidity_at_touch_per_order,
-    plotly_ofi_by_window,
     plotly_order_activity_aggregate,
     plotly_order_activity_per_order,
-    plotly_order_flow_imbalance,
     plotly_order_outcome_per_order,
     plotly_time_series,
+    plotly_trade_imbalance,
+    plotly_trade_imbalance_by_window,
     plotly_trade_tape_aggregate,
     plotly_trade_tape_per_order,
-    plotly_volume_percentiles,
     plotly_vpin,
 )
 from tests._drawn import drawn
@@ -332,7 +332,7 @@ class TestPlotlyLiquidityAtTouchL3:
         assert [tr.type for tr in fig.data] == ["heatmap"]
 
 
-class TestPlotlyOfiByWindow:
+class TestPlotlyTradeImbalanceByWindow:
     @staticmethod
     def _trades() -> pd.DataFrame:
         ts = pd.Timestamp("2015-05-01 01:00:00")
@@ -350,8 +350,8 @@ class TestPlotlyOfiByWindow:
         )
 
     def test_returns_banded_subplots(self) -> None:
-        data = prepare.ofi_by_window(self._trades())
-        fig = plotly_ofi_by_window(data)
+        data = prepare.trade_imbalance_by_window(self._trades())
+        fig = plotly_trade_imbalance_by_window(data)
         assert isinstance(fig, go.Figure)
         # Horizon graph = stacked filled scatter bands (one subplot per row),
         # not a single heatmap.
@@ -361,11 +361,11 @@ class TestPlotlyOfiByWindow:
 
     def test_empty_is_safe(self) -> None:
         data = {
-            "ofi": np.empty((0, 0)),
+            "trade_imbalance": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
             "windows": ["5s", "60s"],
         }
-        assert not drawn(plotly_ofi_by_window(data))
+        assert not drawn(plotly_trade_imbalance_by_window(data))
 
 
 class TestPlotlyOrderOutcomeL3:
@@ -505,8 +505,8 @@ class TestPlotlyDepthChart:
 
 class TestPlotlyVolumePercentiles:
     def test_returns_plotly_figure(self, plot_depth_summary: pd.DataFrame) -> None:
-        data = prepare.volume_percentiles(plot_depth_summary)
-        fig = plotly_volume_percentiles(data)
+        data = prepare.depth_bands(plot_depth_summary)
+        fig = plotly_depth_bands(data)
         assert isinstance(fig, go.Figure)
         assert len(fig.data) >= 20  # 20 asks + 20 bids
 
@@ -593,14 +593,16 @@ class TestPlotlyL1Card:
         assert drawn(fig) == {"shape": 1}  # the card's frame
 
 
-class TestPlotlyOfi:
+class TestPlotlyTradeImbalance:
     def test_returns_plotly_figure(self) -> None:
         ts = pd.date_range("2015-01-01", periods=5, freq="min")
-        ofi_df = pd.DataFrame({"timestamp": ts, "ofi": [0.3, -0.5, 0.7, -0.4, 0.6]})
-        data = prepare.order_flow_imbalance(ofi_df)
-        fig = plotly_order_flow_imbalance(data)
+        imbalance_df = pd.DataFrame(
+            {"timestamp": ts, "trade_imbalance": [0.3, -0.5, 0.7, -0.4, 0.6]}
+        )
+        data = prepare.trade_imbalance(imbalance_df)
+        fig = plotly_trade_imbalance(data)
         # A bar for each minute, and the zero line.
-        assert drawn(fig) == {"bar": len(ofi_df), "shape": 1}
+        assert drawn(fig) == {"bar": len(imbalance_df), "shape": 1}
 
 
 class TestPlotlyKyleLambda:

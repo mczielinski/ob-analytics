@@ -561,8 +561,8 @@ class TestPlotLiquidityAtTouchL3:
         assert not drawn(plot("liquidity_at_touch", Level.L3, **data))
 
 
-class TestPlotOfiByWindow:
-    """OFI horizon graph (level-less analytic): stacked banded rows."""
+class TestPlotTradeImbalanceByWindow:
+    """Trade imbalance horizon graph (level-less analytic): stacked banded rows."""
 
     @staticmethod
     def _trades() -> pd.DataFrame:
@@ -581,8 +581,8 @@ class TestPlotOfiByWindow:
         )
 
     def test_returns_banded_figure(self) -> None:
-        data = prepare.ofi_by_window(self._trades())
-        fig = plot("ofi_by_window", **data)
+        data = prepare.trade_imbalance_by_window(self._trades())
+        fig = plot("trade_imbalance_by_window", **data)
         ax = fig.axes[0]
         assert isinstance(fig, Figure)
         assert ax.collections  # fill_between PolyCollections (the bands)
@@ -592,21 +592,21 @@ class TestPlotOfiByWindow:
 
     def test_empty_is_safe(self) -> None:
         data: dict[str, Any] = {
-            "ofi": np.empty((0, 0)),
+            "trade_imbalance": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
             "windows": ["5s", "60s"],
         }
-        assert not drawn(plot("ofi_by_window", **data))
+        assert not drawn(plot("trade_imbalance_by_window", **data))
 
     @staticmethod
-    def _grid(ofi: np.ndarray) -> dict[str, Any]:
-        """A 45-second, 5-second-step payload with the given OFI rows."""
+    def _grid(imbalance: np.ndarray) -> dict[str, Any]:
+        """A 45-second, 5-second-step payload with the given trade imbalance rows."""
         times = pd.date_range("2015-05-01 01:00:00", periods=10, freq="5s", tz="UTC")
         return {
-            "ofi": ofi,
+            "trade_imbalance": imbalance,
             "times": times.to_numpy(),
             "windows": ["5s", "60s"],
-            **_data._horizon_bands(ofi),
+            **_data._horizon_bands(imbalance),
         }
 
     @pytest.mark.parametrize(
@@ -617,31 +617,31 @@ class TestPlotOfiByWindow:
     def test_time_axis_spans_the_data(self, row: np.ndarray, tmp_path) -> None:
         """Rows with few or no bands still save, on the data's own time range."""
         data = self._grid(np.vstack([row, row]))
-        fig = plot("ofi_by_window", **data)
-        save_figure(fig, tmp_path / "ofi.png")
+        fig = plot("trade_imbalance_by_window", **data)
+        save_figure(fig, tmp_path / "trade_imbalance.png")
 
         x = mdates.date2num(pd.to_datetime(data["times"]))
         assert fig.axes[0].get_xlim() == pytest.approx((x[0], x[-1]))
 
     def test_one_time_step_spans_seconds(self, tmp_path) -> None:
         times = pd.DatetimeIndex(["2015-05-01 01:00:00"], tz="UTC").to_numpy()
-        ofi = np.array([[0.3], [0.1]])
+        imbalance = np.array([[0.3], [0.1]])
         data: dict[str, Any] = {
-            "ofi": ofi,
+            "trade_imbalance": imbalance,
             "times": times,
             "windows": ["5s", "60s"],
-            **_data._horizon_bands(ofi),
+            **_data._horizon_bands(imbalance),
         }
-        fig = plot("ofi_by_window", **data)
-        save_figure(fig, tmp_path / "ofi.png")
+        fig = plot("trade_imbalance_by_window", **data)
+        save_figure(fig, tmp_path / "trade_imbalance.png")
 
         lo, hi = fig.axes[0].get_xlim()
         assert 0 < (hi - lo) * 86_400 <= 10
 
     def test_all_missing_says_no_data(self, tmp_path) -> None:
         data = self._grid(np.full((2, 10), np.nan))
-        fig = plot("ofi_by_window", **data)
-        save_figure(fig, tmp_path / "ofi.png")
+        fig = plot("trade_imbalance_by_window", **data)
+        save_figure(fig, tmp_path / "trade_imbalance.png")
 
         assert "no data" in fig.axes[0].get_title("left")
 
@@ -850,8 +850,8 @@ class TestPlotBookSnapshot:
 class TestPlotVolumePercentiles:
     def test_returns_figure(self, plot_depth_summary):
         fig = plot(
-            "volume_percentiles",
-            **prepare.volume_percentiles(plot_depth_summary),
+            "depth_bands",
+            **prepare.depth_bands(plot_depth_summary),
         )
         # Twenty depth bands a side.
         assert drawn(fig)["fillbetweenpolycollection"] == 40

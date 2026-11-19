@@ -122,7 +122,7 @@ _GRID_FIELDS = (
 class PipelineResult:
     """Immutable container for the core outputs of a pipeline run.
 
-    Analytic outputs (VPIN, OFI, Kyle's λ) are intentionally **not** stored
+    Analytic outputs (VPIN, trade imbalance, Kyle's λ) are intentionally **not** stored
     here — compute them post-pipeline from ``trades`` and append them to the
     gallery model's ``analytics`` (build cards with the ``*_card`` helpers).
 

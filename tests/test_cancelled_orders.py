@@ -29,16 +29,16 @@ def _row(oid, t, action, *, price=100.0, volume=10.0, fill=0.0, kind, bps=np.nan
 def _events() -> pd.DataFrame:
     rows = [
         # Order 1: placed 2 bps behind the best bid, cancelled 1.5 s later.
-        _row(1, 0.0, "created", kind="flashed-limit", bps=-2.0),
-        _row(1, 1.5, "deleted", kind="flashed-limit"),
+        _row(1, 0.0, "created", kind="cancelled-limit", bps=-2.0),
+        _row(1, 1.5, "deleted", kind="cancelled-limit"),
         # Order 2: placed with no best ask to measure from, cancelled 3 s later.
-        _row(2, 1.0, "created", price=101.0, volume=4.0, kind="flashed-limit"),
-        _row(2, 4.0, "deleted", price=101.0, volume=4.0, kind="flashed-limit"),
+        _row(2, 1.0, "created", price=101.0, volume=4.0, kind="cancelled-limit"),
+        _row(2, 4.0, "deleted", price=101.0, volume=4.0, kind="cancelled-limit"),
         # Order 3: a resting order that was filled, not cancelled.
         _row(3, 0.5, "created", kind="resting-limit", bps=0.0),
         _row(3, 2.0, "changed", volume=0.0, fill=10.0, kind="resting-limit"),
-        # Order 5: a flashed order still resting when the data ends.
-        _row(5, 3.0, "created", kind="flashed-limit", bps=1.0),
+        # Order 5: a cancelled-limit order still resting when the data ends.
+        _row(5, 3.0, "created", kind="cancelled-limit", bps=1.0),
     ]
     events = pd.DataFrame(rows)
     events["action"] = pd.Categorical(

@@ -84,7 +84,7 @@ lc[
 #   and the remainder was hit four seconds later; the row compresses all
 #   three steps.
 # - **Dana** placed 3 and filled 0 — outcome `cancelled`, and the
-#   classifier calls her `flashed-limit`, for reasons the next section
+#   classifier calls her `cancelled-limit`, for reasons the next section
 #   makes precise.
 # - **Ivy** filled 1 of her 2 and has an empty `end_s`: its record has
 #   no end time. It is still open when the minute runs out, so its
@@ -106,11 +106,12 @@ lc[
 # | `resting-limit` | never crossed: survived the window untouched, or traded purely as a **maker** | Alice, Bob, Chen, Ivy, Erin, Gus |
 # | `market` | traded purely as a **taker**: crossed on arrival, never rested | Frank, Iris, Sam |
 # | `market-limit` | taker *and* maker: crossed, and the remainder rested | Hana |
-# | `flashed-limit` | created, then deleted with its full size intact — zero fills, **at any lifetime** | Dana, Eve |
+# | `cancelled-limit` | created, then deleted with its full size intact — zero fills, **at any lifetime** | Dana, Eve |
 # | `pre-existing` | first seen mid-stream: no `created` row, no trades — the order predates the data | — |
 # | `unknown` | none of the evidence patterns match | — |
 #
-# Recall chapter 1's pitfall: *flashed means unfilled, not fast*. The
+# Recall chapter 1's pitfall: *`cancelled-limit` says nothing about how
+# long the order lived*. The
 # rule compares the created and deleted sizes and never consults the
 # clock, so Dana's 32 seconds and Eve's 800 ms flash earn the same
 # label.
@@ -157,7 +158,7 @@ fig = plot_lifecycle_story(events, toy_trades(), at_s=[6, 40, 46, 57])
 #   carries on to the edge alone.
 #
 # And four actors are missing **by design**: the face draws the passive
-# classes only (resting- and flashed-limit). Frank, Iris and Sam live on
+# classes only (resting- and cancelled-limit). Frank, Iris and Sam live on
 # the trade tape, not in the book; Hana classified `market-limit`, so
 # even her four resting seconds are excluded. Chapter 2's lesson again:
 # know what a face excludes.
@@ -181,7 +182,7 @@ summary
 
 # %% [markdown]
 # The proportions are nothing like the toy's. Of roughly 157,000 orders,
-# **about 99.7% classify `flashed-limit`** — created and cancelled,
+# **about 99.7% classify `cancelled-limit`** — created and cancelled,
 # never filled. The two crossing classes together are barely a tenth of
 # a percent: **about one order in a thousand arrives intending to trade
 # immediately.** Chapter 1 treated Eve's flash as the exotic case; at
@@ -203,7 +204,7 @@ ax.set_title("Order classes in the sample capture")
 
 # %% [markdown]
 # The axis is logarithmic because it has to be: on a linear scale the
-# flashed-limit column — nearly 400× everything else combined — would be
+# cancelled-limit column — nearly 400× everything else combined — would be
 # the only visible bar.
 #
 # **Why would anyone behave like this?** Because a resting quote at a
@@ -216,7 +217,7 @@ ax.set_title("Order classes in the sample capture")
 
 # %%
 lc_real = order_lifecycles(result.events)
-fl = lc_real[lc_real["type"].astype(str) == "flashed-limit"].copy()
+fl = lc_real[lc_real["type"].astype(str) == "cancelled-limit"].copy()
 end = result.events["timestamp"].max()
 fl = fl[
     fl["end_ts"] <= end - pd.Timedelta(seconds=2)
@@ -225,7 +226,7 @@ life = (fl["end_ts"] - fl["placed_ts"]).dt.total_seconds()
 {f"under {t}s": f"{(life < t).mean():.1%}" for t in (1, 10, 60)}
 
 # %% [markdown]
-# Roughly nine in ten flashed orders live under a *second*; nineteen in
+# Roughly nine in ten cancelled-limit orders live under a *second*; nineteen in
 # twenty are gone within ten. At ~90 order placements per second against
 # a few hundred trades in the whole half hour, this book is not a queue
 # of patient humans — it is a handful of algorithms continuously
@@ -265,11 +266,11 @@ deletes[deletes["timestamp"] > end - pd.Timedelta(seconds=2)]["id"].nunique()
 # **This is a property of the collector, not of order books.** A
 # capture made by a recorder without that convention would end with
 # thousands of orders whose fate is `resting` — and a correspondingly
-# smaller flashed-limit count, since each synthetically closed order
+# smaller cancelled-limit count, since each synthetically closed order
 # now carries a created-then-cancelled-unfilled shape that the
 # classifier — correctly, on the evidence it has — calls
-# `flashed-limit`. (In this capture that accounts for about 6,500 of
-# the 156,000 flashed orders — the repricing churn above, not the
+# `cancelled-limit`. (In this capture that accounts for about 6,500 of
+# the 156,000 cancelled-limit orders — the repricing churn above, not the
 # shutdown, dominates.) The recorder's conventions are part of the
 # window. We return to this in the pitfall at the end of the chapter.
 #
@@ -331,7 +332,7 @@ placed[["price", "type", "aggressiveness_bps"]].round(1)
 #
 # Everything in this chapter rests on two inputs: the event *window*
 # (when the recording starts and stops) and the trade *tape* (whether
-# fills can be attributed to orders). "Dana is a flashed-limit order"
+# fills can be attributed to orders). "Dana is a cancelled-limit order"
 # sounds like a property of Dana. It is not — it is a property of Dana
 # *as seen through this window, with this tape*. The experiment is
 # cheap: replay the toy as if the recording had started at t=12 (the
@@ -367,7 +368,7 @@ pd.DataFrame(
 # - **Full window** — the twelve familiar labels.
 # - **Late window** — **Dana flips to `pre-existing`**: same order, same
 #   cancellation, but her `created` row now predates the recording, so
-#   the evidence for `flashed-limit` is gone. **Chen vanishes entirely**
+#   the evidence for `cancelled-limit` is gone. **Chen vanishes entirely**
 #   (his creation was his only event): an order can be not just
 #   unclassifiable but *invisible*. Alice, Bob and Ivy, who also lost
 #   their `created` rows, *keep* `resting-limit` — the tape rescues
@@ -379,7 +380,7 @@ pd.DataFrame(
 #   orders whose classes degrade.
 #
 # !!! warning "Pitfall: classification is a property of the window and the tape, not of the order"
-#     The same Dana is `flashed-limit` in one capture and `pre-existing`
+#     The same Dana is `cancelled-limit` in one capture and `pre-existing`
 #     in a capture that starts twelve seconds later; the same Frank is
 #     `market` with a matched tape and `unknown` without one. Before
 #     comparing class proportions across captures — or trusting them
@@ -389,7 +390,7 @@ pd.DataFrame(
 #     `pre-existing` nor `unknown` is a bug; both are the classifier
 #     refusing to invent evidence it does not have.
 #
-# ## Exercise: what if Eve had not flashed?
+# ## Exercise: what if Eve had not cancelled?
 #
 # Eve posts a bid of 1 lot at 100 at t=45 and cancels it 800 ms later.
 # Suppose she leaves it in the book. Before you run anything, predict:
@@ -434,7 +435,7 @@ assert eve_lc.loc["Ivy", "filled_vol"] == 0
 #
 # Eve's outcome becomes `filled` and her type `resting-limit`: the same
 # order, placed at the same time, changes class because of how it ended.
-# `flashed-limit` describes what happened to an order, not what its
+# `cancelled-limit` describes what happened to an order, not what its
 # owner meant to do. Ivy, half-filled in the original session, now ends
 # `resting` with nothing filled: one order that stayed in the book
 # changed the outcome of an order behind it in the queue.
@@ -446,7 +447,7 @@ assert eve_lc.loc["Ivy", "filled_vol"] == 0
 # ---
 #
 # *Vocabulary introduced here — [resting-limit / market / market-limit /
-# flashed-limit](../glossary.md#order-classifications),
+# cancelled-limit](../glossary.md#order-classifications),
 # [maker / taker](../glossary.md#order-book-mechanics),
 # [basis point](../glossary.md#order-book-mechanics), order lifecycle,
 # outcome (filled / cancelled / resting), pre-existing, unknown, placement

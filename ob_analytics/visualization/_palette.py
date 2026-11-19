@@ -9,10 +9,10 @@ Three categorical vocabularies, one hue pair/triple each:
 
 * **Side** (resting order's side): bid / ask — book snapshot, depth chart,
   cancellations, best-quote lines.
-* **Fate** (order lifecycle outcome): flashed (cancelled) / resting (filled),
-  plus the competing-risks split filled / partial / cancelled.
+* **Fate** (order lifecycle outcome): the competing-risks split filled /
+  partial / cancelled.
 * **Aggressor** (taker side of an execution): buy / sell — trade tape, trade
-  markers, and order flow imbalance.
+  markers, and trade imbalance.
 
 The rest are neutral marks (price and reference lines, zero rules, labels)
 and the accent colours of the analytics faces.
@@ -46,8 +46,6 @@ class Palette:
     buy, sell : str
         Aggressor side of an execution: buyer-initiated (lifts the ask) and
         seller-initiated (hits the bid).
-    flashed, resting : str
-        Order-activity fate: placed and pulled / rested or filled.
     filled, partial, cancelled : str
         Order-outcome fate: fully executed / partly executed with the
         remainder removed / removed without any execution.

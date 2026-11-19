@@ -25,11 +25,11 @@
 # | Bob | ask 3 @ 101 (t=2) | filled by Frank (1) then Hana (2) | `resting-limit` |
 # | Chen | bid 1 @ 98 (t=5) | still in the book at the end | `resting-limit` |
 # | Ivy | bid 2 @ 99 (t=6) | queued **behind Alice**; only 1 fills (t=57) | `resting-limit` |
-# | Dana | bid 3 @ 98 (t=8) | cancelled (t=40) | `flashed-limit` |
+# | Dana | bid 3 @ 98 (t=8) | cancelled (t=40) | `cancelled-limit` |
 # | Erin | ask 2 @ 102 (t=12) | survives | `resting-limit` |
 # | Frank | market buy 1 (t=20) | crosses the spread, fills against Bob | `market` |
 # | Gus | ask 2 @ 103 (t=35) | survives | `resting-limit` |
-# | Eve | bid 1 @ 100 (t=45.0) | pulled after 800 ms — a *flash* | `flashed-limit` |
+# | Eve | bid 1 @ 100 (t=45.0) | pulled after 800 ms — a *flash* | `cancelled-limit` |
 # | Hana | bid 3 @ 101 (t=48) | takes 2 from Bob, **rests 1**, later hit | `market-limit` |
 # | Iris | market sell 1 (t=52) | hits Hana's resting order | `market` |
 # | Sam | market sell 3 (t=56) | sweeps the 99 queue: Alice fully, Ivy half | `market` |

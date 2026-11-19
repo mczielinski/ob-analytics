@@ -271,4 +271,4 @@ See [Check data quality](audit.md) and
 
 - [Transaction Costs API](../api/cost.md) — parameters and return types
 - [Glossary: transaction cost](../glossary.md#transaction-cost) — what each measure means, with citations
-- [Compute flow toxicity](flow-toxicity.md) — VPIN, Kyle's λ and order-flow imbalance
+- [Compute flow toxicity](flow-toxicity.md) — VPIN, Kyle's λ and trade imbalance
