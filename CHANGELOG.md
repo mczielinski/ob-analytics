@@ -446,6 +446,20 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     `prepare.order_activity` (L2) and `prepare.cancellations` (L2) are now
     in the instrument's units. They compared against the multiplied sizes
     before.
+- **`display_result` moved to `ob_analytics.display`** (#499). Data code can
+  now convert a result to display units without importing the plotting
+  package.
+  - `from ob_analytics.visualization.gallery import display_result` ->
+    `from ob_analytics.display import display_result`.
+    `from ob_analytics.visualization import display_result` still works.
+  - It now also converts the events `raw_size` column, which is a size in
+    lots like `volume`.
+  - `depth.bin_volume_columns(frame, side)` -> `[b.column for b in
+    schemas.depth_bins(frame.columns, side)]`.
+  - The capture-file column tuples in `ob_analytics.capture_files` are
+    renamed so they are not mistaken for the table contracts:
+    `ORDER_COLUMNS` -> `ORDERS_CSV_COLUMNS`, `TRADE_COLUMNS` ->
+    `TRADES_CSV_COLUMNS`, `DEPTH_COLUMNS` -> `DEPTH_CSV_COLUMNS`.
 
 ### Added
 
@@ -1192,6 +1206,19 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **One contract per table** (#499). `ob_analytics.schemas.TABLES` holds a
+  contract for every table the package returns: events, trades, depth,
+  depth_summary, order lifecycles, queue positions, book snapshots, bars and
+  transaction costs. Each column has its dtype and says whether it is a
+  price, a size or neither. `EVENT_COLUMNS`, `EVENT_DTYPES`, `BAR_COLUMNS`,
+  `COST_COLUMNS`, `QUEUE_COLUMNS` and the other column tuples are now taken
+  from the contracts, with the same contents as before. `display_result`
+  reads the price and size tags instead of keeping its own column lists and
+  finding size columns by the letters "vol". `schemas.depth_bins` returns
+  the side and distance of each `depth_summary` bin column, so no module
+  reads those names with a pattern of its own. `docs/schema.md` now also
+  describes the queue, bars and costs tables, and a test checks the page
+  against the contracts.
 - **Four helpers moved down a layer** (#522). Each was the only reason for an
   upward import, so ADR 0001 and the layer test no longer allow those imports.
   `QualityCheck` and `Severity` now live in the shared layer, and

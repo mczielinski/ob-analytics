@@ -21,7 +21,7 @@ import html as html_mod
 import inspect
 import warnings
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -32,11 +32,10 @@ from matplotlib.axes import Axes
 
 from ob_analytics._utils import (
     _UNSET,
-    lots_to_size,
-    ticks_to_price,
     ticks_to_price_if_integer,
 )
 from ob_analytics.depth import get_spread
+from ob_analytics.display import display_result
 from ob_analytics.exceptions import ConfigError, UnknownNameError
 from ob_analytics.flow_toxicity import TRADE_IMBALANCE_WINDOWS
 from ob_analytics.pipeline import PipelineResult
@@ -64,7 +63,6 @@ __all__ = [
     "available_concepts",
     "bars_card",
     "build_gallery_model",
-    "display_result",
     "generate_gallery",
     "kyle_lambda_card",
     "plot_result",
@@ -260,11 +258,12 @@ def _metric_cards(result: PipelineResult) -> list[PlotSpec]:
     the metrics it does not draw.  A metric that raises fails only its own
     card, which says why.
 
-    *result* is the run as it is, not converted with :func:`display_result`:
-    every metric reports in the instrument's own units from the run's own
-    frames, so a card shows the numbers ``result.metric(name)`` returns.  The
-    one exception is a setting in :data:`_GALLERY_SETTINGS`: VPIN's buckets
-    are fitted to the capture, and the card says so when that changed them.
+    *result* is the run as it is, not converted with
+    :func:`~ob_analytics.display.display_result`: every metric reports in the
+    instrument's own units from the run's own frames, so a card shows the
+    numbers ``result.metric(name)`` returns.  The one exception is a setting
+    in :data:`_GALLERY_SETTINGS`: VPIN's buckets are fitted to the capture,
+    and the card says so when that changed them.
     """
     from ob_analytics.metrics import applicable_metrics
 
@@ -288,112 +287,6 @@ def _gallery_settings(metric: Any) -> dict[str, Any]:
     names = _compute_settings(metric)
     settings = _GALLERY_SETTINGS.get(metric.name, {})
     return {k: v for k, v in settings.items() if k in names}
-
-
-#: Price-valued columns per frame, converted from integer ticks to a
-#: quote-currency float for display.  Bps columns are scale-free
-#: and are left alone; size-valued columns are handled by
-#: :data:`_DISPLAY_SIZE_COLUMNS`.
-_DISPLAY_PRICE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "events": ("price",),
-    "trades": ("price",),
-    "depth": ("price",),
-    "depth_summary": ("best_bid_price", "best_ask_price"),
-}
-
-#: Size-valued columns per frame, converted from integer lots to a base-asset
-#: float for display.  ``depth_summary`` carries one volume column
-#: per bps bin and the bin count is configurable, so that frame is matched by
-#: name rather than listed.
-_DISPLAY_SIZE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "events": ("volume", "fill"),
-    "trades": ("volume",),
-    "depth": ("volume",),
-}
-
-
-def _size_columns(df: pd.DataFrame) -> tuple[str, ...]:
-    """Return the size-valued ``depth_summary`` columns present in *df*.
-
-    Every one is named ``..._vol`` or ``..._volNNNbps`` — the per-bin depth
-    columns, whose count follows ``depth_bins``, plus the two at the touch.
-    """
-    return tuple(c for c in df.columns if "vol" in c)
-
-
-def display_result(result: PipelineResult) -> PipelineResult:
-    """Return *result* with prices and sizes converted to display units.
-
-    Canonical prices are integer ticks (:mod:`ob_analytics.schemas`); the plots
-    show the quote currency, so this converts each price column to the
-    ``ticks * tick_size`` float the faces render, reading ``tick_size`` from
-    ``result.config``.  :func:`build_gallery_model` calls it once so every face —
-    the ``prepare`` helpers, ``order_book`` / ``queue_positions`` called inside
-    them, the axes — works in display units; call it yourself before the
-    low-level ``prepare.*`` builders when you plot straight from a result.
-
-    Sizes are converted the same way, from integer lots to the base-asset
-    ``lots * lot_size`` float.
-
-    Idempotent and legacy-safe: only integer columns are scaled, so a result
-    whose prices or sizes are already floats (a pre-tick or pre-lot file, or a
-    result already passed through here) is returned unchanged.
-    """
-    tick_size = getattr(result.config, "tick_size", 1.0)
-    decimals = getattr(result.config, "price_decimals", None)
-    lot_size = getattr(result.config, "lot_size", 1.0)
-    size_decimals = getattr(result.config, "volume_decimals", None)
-
-    def _scale(df: pd.DataFrame, columns: tuple[str, ...], convert) -> pd.DataFrame:
-        present = [
-            c
-            for c in columns
-            if c in df.columns and pd.api.types.is_integer_dtype(df[c])
-        ]
-        if df.empty or not present:
-            return df
-        out = df.copy()
-        for column in present:
-            out[column] = convert(out[column].to_numpy())
-        return out
-
-    def to_display(
-        df: pd.DataFrame, price_columns: tuple[str, ...], size_columns: tuple[str, ...]
-    ) -> pd.DataFrame:
-        df = _scale(
-            df,
-            price_columns,
-            lambda a: ticks_to_price(a, tick_size, decimals=decimals),
-        )
-        return _scale(
-            df,
-            size_columns,
-            lambda a: lots_to_size(a, lot_size, decimals=size_decimals),
-        )
-
-    return replace(
-        result,
-        events=to_display(
-            result.events,
-            _DISPLAY_PRICE_COLUMNS["events"],
-            _DISPLAY_SIZE_COLUMNS["events"],
-        ),
-        trades=to_display(
-            result.trades,
-            _DISPLAY_PRICE_COLUMNS["trades"],
-            _DISPLAY_SIZE_COLUMNS["trades"],
-        ),
-        depth=to_display(
-            result.depth,
-            _DISPLAY_PRICE_COLUMNS["depth"],
-            _DISPLAY_SIZE_COLUMNS["depth"],
-        ),
-        depth_summary=to_display(
-            result.depth_summary,
-            _DISPLAY_PRICE_COLUMNS["depth_summary"],
-            _size_columns(result.depth_summary),
-        ),
-    )
 
 
 def _display(result: PipelineResult) -> PipelineResult:
@@ -434,7 +327,7 @@ def _hidden_liquidity_overlay(
         # Detected on raw ticks (exact price equality), then its own price
         # columns are converted to display units the same way display_result()
         # converted the core frames -- the overlay must land on the axes it
-        # draws over. Legacy-safe like display_result()'s own _scale: only an
+        # draws over. Legacy-safe like display_result(): only an
         # integer (tick) column is converted, so a pre-tick result whose
         # events/trades already carry display-unit floats is not scaled twice.
         slices = iceberg_slices(raw_result.events, raw_result.trades)
@@ -584,8 +477,8 @@ def plot_result(
         Concept key, e.g. ``"trade_tape"`` (see :data:`available_concepts`).
         The name of a registered metric works too; a metric is level-less, so
         *level* does not apply to it.  A metric measures *result* as it is,
-        not converted with :func:`display_result`, and draws the table
-        ``result.metric(concept)`` returns.
+        not converted with :func:`~ob_analytics.display.display_result`, and
+        draws the table ``result.metric(concept)`` returns.
     level : Level or str, optional
         ``"L2"`` / ``"L3"`` (or a :class:`Level`).  Leave it out when *result*
         has the concept at one level; it is required when *result* has the
@@ -723,8 +616,9 @@ def bars_card(bars: pd.DataFrame, *, label: str = "") -> PlotSpec:
     *bars* is a table from :func:`ob_analytics.bars.bars`.  *label* names
     the rule and threshold it was cut with and is shown in the chart title;
     the default reads them off the frame.  Prices are drawn as they arrive, so
-    cut the bars from a display-unit trades frame (see :func:`display_result`)
-    when the rest of the gallery is in the quote currency.
+    cut the bars from a display-unit trades frame (see
+    :func:`~ob_analytics.display.display_result`) when the rest of the gallery is
+    in the quote currency.
     """
     label = label or _viz_data.bars_label(bars)
     rule = bars.attrs.get("bar_rule")

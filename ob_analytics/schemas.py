@@ -1,11 +1,11 @@
 """Column contracts for the DataFrames flowing through the pipeline.
 
-This module is the single source of truth for which columns each pipeline
-DataFrame must carry, and for the dtypes of the events and trades tables
-(:data:`EVENT_DTYPES`, :data:`TRADE_DTYPES`). It replaces the parallel Pydantic models that lived
-in the deleted ``models.py``: the pipeline runs on DataFrames, so the
-contract is a set of required column names plus validators that raise on
-violation — not a row model the pipeline never instantiated.
+This module holds one contract for each table the package returns
+(:data:`TABLES`): the columns, in order, with the dtype of each and whether it
+holds a price, a size or neither.  The pipeline runs on DataFrames, so a
+contract is a list of columns plus validators that raise on violation, not a
+row model.  ``docs/schema.md`` describes the same tables, and a test holds the
+two to each other.
 
 Validators check that the REQUIRED columns are present, and that each column
 named in :data:`EVENT_DTYPES` or :data:`TRADE_DTYPES` has its dtype; extra
@@ -131,9 +131,11 @@ type, unit, nullability, and meaning for every table — is in ``docs/schema.md`
 from __future__ import annotations
 
 import json
+import re
 import warnings
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import pandas as pd
 
@@ -146,10 +148,18 @@ __all__ = [
     "EVENT_DTYPES",
     "HIDDEN_ORDER_ID",
     "MAYBE_BAD_BOOK_ATTR",
+    "PRICE",
+    "SIZE",
     "SYMBOL_COLUMN",
+    "TABLES",
     "TRADE_DTYPES",
     "VENUE_COLUMN",
+    "Column",
+    "DepthBin",
+    "Table",
     "cast_events",
+    "depth_bin_name",
+    "depth_bins",
     "group_by_instrument",
     "validate_depth_df",
     "validate_events_df",
@@ -584,41 +594,11 @@ def time_order_keys(df: pd.DataFrame) -> list[str]:
     return [TIMESTAMP_COLUMN, *(k for k in _TIME_ORDER_TIEBREAKS if k in df.columns)]
 
 
-# Required by price_level_volume / set_order_types (see depth.py).
-# `volume`/`fill` semantics: see the module docstring.
-EVENT_COLUMNS: tuple[str, ...] = (
-    "event_id",
-    "id",
-    "timestamp",
-    "exchange_timestamp",
-    "price",
-    "volume",
-    "direction",
-    "action",
-    "fill",
-    "type",
-)
-
-# Canonical trades schema: taker-side direction + maker/taker attribution.
-TRADE_COLUMNS: tuple[str, ...] = (
-    "timestamp",
-    "price",
-    "volume",
-    "direction",
-    "maker_event_id",
-    "taker_event_id",
-)
-
 # ── Column dtypes ─────────────────────────────────────────────────────
 #
-# The dtype of every events and trades column.  Every trade reader, the empty
-# frames, the toy dataset and the simulator cast through these maps, and
-# ``load_data`` casts a saved trades table back through ``TRADE_DTYPES``, and
-# every event loader casts through ``EVENT_DTYPES`` (:func:`cast_events`), so
-# every frame of one table has the same dtypes and a concat of two runs keeps
-# them.  The validators check the same maps.  A category list for a side, an
-# action or an order type is written only here.
-# ``docs/schema.md`` lists the same types as Arrow types.
+# A category list for a side, an action or an order type is written only
+# here.  ``docs/schema.md`` lists the same types as Arrow types, and
+# ``tests/test_schema_doc.py`` holds the two to each other.
 
 BOOK_SIDE_DTYPE = pd.CategoricalDtype(["bid", "ask"], ordered=True)
 """Dtype of an events ``direction`` column: the order's side of the book."""
@@ -645,47 +625,419 @@ TRADE_SIDE_DTYPE = pd.CategoricalDtype(["buy", "sell"], ordered=True)
 UTC_NS_DTYPE = "datetime64[ns, UTC]"
 """Dtype of every timestamp column (see the timestamp policy above)."""
 
-EVENT_DTYPES: dict[str, str | pd.CategoricalDtype] = {
-    "event_id": "int64",
-    # Order ids are int64, except in a Bitstamp-format capture from a venue
-    # with text ids (UUIDs), which keeps them as text.
-    "id": "int64",
-    "timestamp": UTC_NS_DTYPE,
-    "exchange_timestamp": UTC_NS_DTYPE,
-    "price": "int64",
-    "volume": "int64",
-    "direction": BOOK_SIDE_DTYPE,
-    "action": ACTION_DTYPE,
-    "fill": "int64",
-    "type": ORDER_TYPE_DTYPE,
-    "original_number": "int64",
-    # The venue's own code: an int on LOBSTER, a letter on Databento, null on
-    # Bitstamp, so it has no one type.
-    "raw_event_type": "object",
+
+# ── Table contracts ───────────────────────────────────────────────────
+#
+# One contract per table the package returns.  Each column has its dtype and
+# says whether it holds a price, a size or neither, so code that converts
+# units (``ob_analytics.display``) reads the contract instead of keeping a
+# column list of its own.  The column tuples and dtype maps further down
+# (``EVENT_COLUMNS``, ``EVENT_DTYPES`` and the rest) are taken from these.
+
+Kind = Literal["price", "size"]
+"""What a column measures, when it is a price or a size."""
+
+PRICE: Kind = "price"
+"""The :attr:`Column.kind` of a price column."""
+
+SIZE: Kind = "size"
+"""The :attr:`Column.kind` of a size column."""
+
+Presence = Literal["required", "standard", "optional"]
+"""How often a table carries a column."""
+
+
+@dataclass(frozen=True)
+class Column:
+    """One column of a table contract.
+
+    Attributes
+    ----------
+    name : str
+        The column name.  In :attr:`Table.bin_columns` it is a pattern, with
+        ``{N}`` where the distance goes.
+    dtype : str or pandas.CategoricalDtype
+        The pandas dtype on a pipeline result.  ``"object"`` means the column
+        has no one type: the venue's own ids, for example, are ints on some
+        venues and text on others.
+    kind : {"price", "size"} or None
+        ``"price"`` for a price, ``"size"`` for a size, ``None`` for any other
+        column.  A price on a pipeline result is a whole number of ticks and a
+        size a whole number of lots when the dtype is an integer; a float
+        price or size is already in the quote currency or the instrument's
+        units, except where the table's documentation says otherwise.
+    presence : {"required", "standard", "optional"}
+        ``"required"``: the table's validator refuses a frame without it.
+        ``"standard"``: every producer writes it, but a frame without it is
+        still accepted.  ``"optional"``: only some sources or stages add it.
+    """
+
+    name: str
+    dtype: str | pd.CategoricalDtype
+    kind: Kind | None = None
+    presence: Presence = "required"
+
+
+@dataclass(frozen=True)
+class Table:
+    """The contract of one table: its columns, in order, with their dtypes.
+
+    Attributes
+    ----------
+    name : str
+        The table's name, as in :data:`TABLES`.
+    columns : tuple of Column
+        The columns with fixed names, in the order the table has them.
+    bin_columns : tuple of Column
+        Columns whose names follow a rule, one :class:`Column` per rule.
+        Only ``depth_summary`` has them: one column per depth bin on each
+        side (see :func:`depth_bins`).
+    """
+
+    name: str
+    columns: tuple[Column, ...]
+    bin_columns: tuple[Column, ...] = ()
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """The names of :attr:`columns`, in order."""
+        return tuple(column.name for column in self.columns)
+
+    @property
+    def required(self) -> tuple[str, ...]:
+        """The names of the columns the table's validator requires, in order."""
+        return tuple(c.name for c in self.columns if c.presence == "required")
+
+    @property
+    def dtypes(self) -> dict[str, str | pd.CategoricalDtype]:
+        """The dtype of each column every producer writes.
+
+        Optional columns are left out, so an empty frame built from this map
+        has the columns every frame of the table has.
+        """
+        return {c.name: c.dtype for c in self.columns if c.presence != "optional"}
+
+    def column(self, name: str) -> Column | None:
+        """Return the :class:`Column` for *name*, or ``None`` if it is not one.
+
+        A depth-bin name gives the bin rule's column under that name.
+        """
+        for column in self.columns:
+            if column.name == name:
+                return column
+        if self.bin_columns:
+            for found in depth_bins([name]):
+                rule = self.bin_columns[DEPTH_BIN_SIDES.index(found.side)]
+                return replace(rule, name=name)
+        return None
+
+    def columns_of(self, names: Iterable[str], kind: Kind) -> tuple[str, ...]:
+        """Return those of *names* that the contract tags with *kind*, in order.
+
+        Parameters
+        ----------
+        names : iterable of str
+            Column names, usually a frame's ``columns``.  A name the contract
+            does not know is left out.
+        kind : {"price", "size"}
+            Which columns to return.
+        """
+        return tuple(
+            name
+            for name in names
+            if (column := self.column(name)) is not None and column.kind == kind
+        )
+
+
+# ── Depth-bin columns ─────────────────────────────────────────────────
+#
+# ``depth_summary`` has one size column per depth bin on each side.  Their
+# count follows ``depth_bins`` and their distances follow ``depth_bps``, so
+# the names are built and read here, and nowhere else.
+
+DEPTH_BIN_SIDES: tuple[str, str] = ("bid", "ask")
+"""The book sides a depth bin can be on, in the order the table has them."""
+
+_DEPTH_BIN_NAME = "{side}_vol{bps}bps"
+_DEPTH_BIN_PATTERN = re.compile(
+    "^" + _DEPTH_BIN_NAME.format(side="(bid|ask)", bps=r"(\d+)") + "$"
+)
+
+
+class DepthBin(NamedTuple):
+    """One depth-bin column of a ``depth_summary`` table.
+
+    Attributes
+    ----------
+    column : str
+        The column name.
+    side : str
+        ``"bid"`` or ``"ask"``.
+    bps : int
+        How far the bin reaches from the best price on its side, in basis
+        points.  The bin holds the size between the bin before it and here.
+    """
+
+    column: str
+    side: str
+    bps: int
+
+
+def depth_bin_name(side: str, bps: int | str) -> str:
+    """Return the name of the depth-bin column on *side* that reaches *bps*.
+
+    Parameters
+    ----------
+    side : str
+        ``"bid"`` or ``"ask"``.
+    bps : int or str
+        The bin's distance in basis points.  A string is used as it is, so
+        ``"{N}"`` gives the pattern the docs show and ``"025"`` a padded
+        label.
+    """
+    return _DEPTH_BIN_NAME.format(side=side, bps=bps)
+
+
+def depth_bins(names: Iterable[str], side: str | None = None) -> list[DepthBin]:
+    """Return the depth-bin columns among *names*, with their side and distance.
+
+    Parameters
+    ----------
+    names : iterable of str
+        Column names, usually a ``depth_summary`` frame's ``columns``.
+    side : str, optional
+        ``"bid"`` or ``"ask"`` to return one side only.  ``None`` (the
+        default) returns both.
+
+    Returns
+    -------
+    list of DepthBin
+        The bid bins and then the ask bins, each from the touch outward.  The
+        order does not depend on the order of *names*, so a summary built with
+        any ``depth_bps`` and ``depth_bins`` reads the same way.
+    """
+    found = []
+    for name in names:
+        match = _DEPTH_BIN_PATTERN.match(name)
+        if match is not None and side in (None, match.group(1)):
+            found.append(DepthBin(name, match.group(1), int(match.group(2))))
+    return sorted(found, key=lambda b: (DEPTH_BIN_SIDES.index(b.side), b.bps))
+
+
+# Required by price_level_volume / set_order_types (see depth.py).
+# ``volume``/``fill`` semantics: see the module docstring.
+EVENTS = Table(
+    "events",
+    (
+        Column("event_id", "int64"),
+        # Order ids are int64, except in a Bitstamp-format capture from a
+        # venue with text ids (UUIDs), which keeps them as text.
+        Column("id", "int64"),
+        Column("timestamp", UTC_NS_DTYPE),
+        Column("exchange_timestamp", UTC_NS_DTYPE),
+        Column("price", "int64", PRICE),
+        Column("volume", "int64", SIZE),
+        Column("direction", BOOK_SIDE_DTYPE),
+        Column("action", ACTION_DTYPE),
+        Column("fill", "int64", SIZE),
+        Column("type", ORDER_TYPE_DTYPE),
+        Column("original_number", "int64", presence="standard"),
+        # The venue's own code: an int on LOBSTER, a letter on Databento, null
+        # on Bitstamp, so it has no one type.
+        Column("raw_event_type", "object", presence="standard"),
+        Column("raw_size", "int64", SIZE, presence="optional"),
+        Column("aggressiveness_bps", "float64", presence="optional"),
+    ),
+)
+"""The events table: one row per order event."""
+
+TRADES = Table(
+    "trades",
+    (
+        Column("timestamp", UTC_NS_DTYPE),
+        Column("price", "int64", PRICE),
+        Column("volume", "int64", SIZE),
+        # The taker's side; null on an L2 feed until trade signing fills it.
+        Column("direction", TRADE_SIDE_DTYPE),
+        # The event ids and source row numbers are this package's own
+        # integers, null when the feed does not name the order (every L2 feed,
+        # and the taker on LOBSTER and Databento) or the reader cannot match
+        # it to an event, so they are nullable ``Int64``: Arrow writes them as
+        # ``int64`` with a null mask.
+        Column("maker_event_id", "Int64"),
+        Column("taker_event_id", "Int64"),
+        # The order ids are the venue's own, as in the events ``id`` column:
+        # an int on most venues, text on some (UUIDs), or null.
+        Column("maker", "object", presence="standard"),
+        Column("taker", "object", presence="standard"),
+        Column("maker_og", "Int64", presence="standard"),
+        Column("taker_og", "Int64", presence="standard"),
+    ),
+)
+"""The trades table: one row per execution."""
+
+DEPTH = Table(
+    "depth",
+    (
+        Column("event_id", "int64", presence="optional"),
+        Column("timestamp", UTC_NS_DTYPE),
+        Column("price", "int64", PRICE),
+        Column("volume", "int64", SIZE),
+        # The level's side, as in DepthSummaryEngine.compute.
+        Column("direction", BOOK_SIDE_DTYPE),
+    ),
+)
+"""The depth table: one row per change in a price level's size."""
+
+DEPTH_SUMMARY = Table(
+    "depth_summary",
+    (
+        Column("timestamp", UTC_NS_DTYPE),
+        Column("event_id", "int64", presence="optional"),
+        Column("best_bid_price", "int64", PRICE),
+        Column("best_bid_vol", "int64", SIZE),
+        Column("best_ask_price", "int64", PRICE),
+        Column("best_ask_vol", "int64", SIZE),
+    ),
+    bin_columns=tuple(
+        Column(depth_bin_name(side, "{N}"), "int64", SIZE) for side in DEPTH_BIN_SIDES
+    ),
+)
+"""The depth summary: the book's best prices and depth bins after each event."""
+
+LIFECYCLES = Table(
+    "lifecycles",
+    (
+        Column("id", "int64"),
+        Column("placed_ts", UTC_NS_DTYPE),
+        Column("placed_vol", "int64", SIZE),
+        Column("price", "int64", PRICE),
+        Column("direction", BOOK_SIDE_DTYPE),
+        Column("type", ORDER_TYPE_DTYPE, presence="optional"),
+        Column("aggressiveness_bps", "float64", presence="optional"),
+        Column("filled_vol", "int64", SIZE),
+        Column("end_ts", UTC_NS_DTYPE),
+        Column("outcome", "str"),
+    ),
+)
+"""The order lifecycles: one row per order, from placement to outcome."""
+
+QUEUE = Table(
+    "queue",
+    (
+        Column("timestamp", UTC_NS_DTYPE),
+        Column("id", "int64"),
+        Column("direction", "str"),
+        Column("price", "int64", PRICE),
+        Column("action", "str"),
+        Column("rank", "int64"),
+        Column("queue_len", "int64"),
+        Column("ahead_volume", "int64", SIZE),
+        Column("remaining", "int64", SIZE),
+        Column("age_s", "float64"),
+    ),
+)
+"""The queue positions: one row per order event that keeps a place in a queue."""
+
+BOOK = Table(
+    "book",
+    (
+        Column("id", "int64"),
+        Column("timestamp", UTC_NS_DTYPE),
+        Column("exchange_timestamp", UTC_NS_DTYPE),
+        Column("price", "int64", PRICE),
+        Column("volume", "int64", SIZE),
+        Column("liquidity", "int64", SIZE),
+        Column("bps", "float64"),
+    ),
+)
+"""One side of a book snapshot: one row per resting order, best price first."""
+
+BARS = Table(
+    "bars",
+    (
+        Column("bar", "int64"),
+        Column("timestamp_start", UTC_NS_DTYPE),
+        Column("timestamp_end", UTC_NS_DTYPE),
+        Column("open", "int64", PRICE),
+        Column("high", "int64", PRICE),
+        Column("low", "int64", PRICE),
+        Column("close", "int64", PRICE),
+        Column("volume", "int64", SIZE),
+        # Price times size, as a float: ticks times lots can be too large for
+        # an integer.
+        Column("turnover", "float64"),
+        Column("n_trades", "int64"),
+        # ``turnover / volume``: a price in the units of the trades, as a
+        # float, so ticks on a pipeline result.
+        Column("vwap", "float64", PRICE),
+        Column("buy_volume", "int64", SIZE),
+        Column("sell_volume", "int64", SIZE),
+        Column("signed_volume", "int64", SIZE),
+    ),
+)
+"""The bars: one row per bar of trades."""
+
+COSTS = Table(
+    "costs",
+    (
+        Column("timestamp", UTC_NS_DTYPE),
+        Column("price", "float64", PRICE),
+        Column("volume", "float64", SIZE),
+        Column("direction", TRADE_SIDE_DTYPE),
+        Column("mid_price", "float64", PRICE),
+        Column("future_mid_price", "float64", PRICE),
+        Column("effective_spread", "float64", PRICE),
+        Column("realized_spread", "float64", PRICE),
+        Column("price_impact", "float64", PRICE),
+        Column("effective_spread_bps", "float64"),
+        Column("realized_spread_bps", "float64"),
+        Column("price_impact_bps", "float64"),
+    ),
+)
+"""The transaction costs: one row per trade, in the quote currency."""
+
+TABLES: dict[str, Table] = {
+    table.name: table
+    for table in (
+        EVENTS,
+        TRADES,
+        DEPTH,
+        DEPTH_SUMMARY,
+        LIFECYCLES,
+        QUEUE,
+        BOOK,
+        BARS,
+        COSTS,
+    )
 }
+"""Every table contract, by table name.
+
+The features table is not here: its columns follow the features asked for.
+Its index columns are :data:`ob_analytics.features.INDEX_COLUMNS`."""
+
+EVENT_COLUMNS: tuple[str, ...] = EVENTS.required
+"""The columns every events frame must have."""
+
+TRADE_COLUMNS: tuple[str, ...] = TRADES.required
+"""The columns every trades frame must have: the taker's side and the maker
+and taker attribution."""
+
+DEPTH_COLUMNS: tuple[str, ...] = DEPTH.required
+"""The columns every depth frame must have."""
+
+# Every trade reader, the empty frames, the toy dataset and the simulator cast
+# through these maps, ``load_data`` casts a saved trades table back through
+# ``TRADE_DTYPES``, and every event loader casts through ``EVENT_DTYPES``
+# (:func:`cast_events`), so every frame of one table has the same dtypes and a
+# concat of two runs keeps them.  The validators check the same maps.
+
+EVENT_DTYPES: dict[str, str | pd.CategoricalDtype] = EVENTS.dtypes
 """Dtype of each column of the events table: :data:`EVENT_COLUMNS` plus the
 provenance columns every loader carries.  Prices are integer ticks and sizes
 integer lots."""
 
-TRADE_DTYPES: dict[str, str | pd.CategoricalDtype] = {
-    "timestamp": UTC_NS_DTYPE,
-    "price": "int64",
-    "volume": "int64",
-    "direction": TRADE_SIDE_DTYPE,
-    # The event ids and source row numbers are this package's own integers,
-    # null when the feed does not name the order (every L2 feed, and the taker
-    # on LOBSTER and Databento) or the reader cannot match it to an event, so
-    # they are nullable ``Int64``: Arrow writes them as ``int64`` with a null
-    # mask.
-    "maker_event_id": "Int64",
-    "taker_event_id": "Int64",
-    # The order ids are the venue's own, as in the events ``id`` column: an
-    # int on most venues, text on some (UUIDs), or null.
-    "maker": "object",
-    "taker": "object",
-    "maker_og": "Int64",
-    "taker_og": "Int64",
-}
+TRADE_DTYPES: dict[str, str | pd.CategoricalDtype] = TRADES.dtypes
 """Dtype of each column of the trades table: :data:`TRADE_COLUMNS` plus the
 maker and taker provenance columns.  ``direction`` is null on an L2 feed until
 trade signing fills it."""
@@ -739,15 +1091,6 @@ def empty_frame(dtypes: dict[str, str | pd.CategoricalDtype]) -> pd.DataFrame:
     return pd.DataFrame(
         {col: pd.Series([], dtype=dtype) for col, dtype in dtypes.items()}
     )
-
-
-# Depth uses 'direction' (bid/ask) to match DepthSummaryEngine.compute.
-DEPTH_COLUMNS: tuple[str, ...] = (
-    "timestamp",
-    "price",
-    "volume",
-    "direction",
-)
 
 
 # ── Instrument identity (optional, additive) ──────────────────────────

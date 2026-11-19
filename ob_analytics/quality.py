@@ -572,7 +572,7 @@ def detect_stale_orders(
 
     The tables can be the pipeline's own (prices in integer ticks, sizes in
     integer lots; pass ``tick_size``) or the tables
-    :func:`~ob_analytics.visualization.display_result` converts for display
+    :func:`~ob_analytics.display.display_result` converts for display
     (prices in the quote currency, sizes in the base asset; leave
     ``tick_size`` at ``1.0``).  Both give the same orders and the same times.
 
@@ -1590,7 +1590,7 @@ def data_quality_summary(
     declarations here yourself only for tables that are not a run's.
 
     Like :func:`detect_stale_orders`, this takes either the pipeline's own
-    tables or the tables :func:`~ob_analytics.visualization.display_result`
+    tables or the tables :func:`~ob_analytics.display.display_result`
     converts for display, and measures the same crossing and the same stale
     orders on both.
 

@@ -28,14 +28,14 @@ import pandas as pd
 from ob_analytics import _engine_frames, engine
 from ob_analytics._utils import epoch_ns, require_per_order_events
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.schemas import time_order_keys, validate_columns
+from ob_analytics.schemas import QUEUE, time_order_keys, validate_columns
 
 __all__ = [
     "queue_age_grid",
     "queue_positions",
 ]
 
-QUEUE_COLUMNS: tuple[str, ...] = _engine_frames.QUEUE_COLUMNS
+QUEUE_COLUMNS: tuple[str, ...] = QUEUE.names
 
 _ENGINE_COLUMNS = [
     "event_id",

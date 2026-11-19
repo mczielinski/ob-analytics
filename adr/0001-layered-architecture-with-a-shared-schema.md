@@ -100,7 +100,11 @@ import, add it to both, with the reason here.
 
 The schema and the small helpers every layer uses (`schemas`, `config`,
 `protocols`, `exceptions`, `_utils`, the `QualityCheck` and `Severity` types,
-and a few others) form a shared layer under all five. The diagram puts
+and a few others) form a shared layer under all five. `schemas` holds one
+contract per table the package returns, and `display`, which converts a
+result to display units from those contracts, sits beside it. Until 0.2 the
+converter was in the gallery, so data code had to import the plotting
+package to use it. The diagram puts
 `plot_result` and `prepare` in the public API, so the test does too, and puts
 the gallery beside them. The rest of
 `ob_analytics.visualization`, Parquet I/O (`data`) and the backtest writers

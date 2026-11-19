@@ -51,6 +51,7 @@ LAYER_OF: dict[str, str] = {
     "ob_analytics._registry": SHARED,
     "ob_analytics._secrets": SHARED,
     "ob_analytics._quality_checks": SHARED,
+    "ob_analytics.display": SHARED,
     # Sources: files, live feeds, and generated sessions.
     "ob_analytics.sources": SOURCES,
     "ob_analytics.capture_record": SOURCES,

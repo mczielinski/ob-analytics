@@ -125,7 +125,7 @@ def detect_icebergs(
           displayed size of the slice they replaced.
         - ``peak`` — displayed size of the first slice, in lots (or in the
           events' own units when their sizes are floats, as after
-          :func:`~ob_analytics.visualization.display_result`); ``<NA>`` when
+          :func:`~ob_analytics.display.display_result`); ``<NA>`` when
           the first slice was already resting when the stream began.
         - ``executed`` — size filled across all slices, in the same units.
         - ``median_delay_s`` — median wait from a peak filled to its refill.

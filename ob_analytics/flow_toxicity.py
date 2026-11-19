@@ -334,7 +334,7 @@ def vpin(
         contracts).  It means the same amount whether ``trades["volume"]``
         holds integer lots (with ``trades.attrs["lot_size"]``, as on a
         pipeline result) or display sizes (see
-        :func:`~ob_analytics.visualization.display_result`).  This is highly
+        :func:`~ob_analytics.display.display_result`).  This is highly
         instrument-specific, so size it from the data.  When left out, it is
         picked by :func:`vpin_bucket_volume` (average daily volume ÷ 50, with
         a 24-hour trading day).  ``"fit"`` picks it the same way, unless that

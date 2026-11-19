@@ -9,7 +9,6 @@ with :func:`price_level_volume`, :func:`filter_depth`,
 
 from __future__ import annotations
 
-import re
 import warnings
 from collections.abc import Iterable
 from datetime import datetime
@@ -33,7 +32,16 @@ from ob_analytics._utils import (
 from ob_analytics.book import BookSnapshot
 from ob_analytics.config import PipelineConfig
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.schemas import time_order_keys, validate_columns
+from ob_analytics.schemas import (
+    DEPTH_BIN_SIDES,
+    DEPTH_SUMMARY,
+    PRICE,
+    SIZE,
+    depth_bin_name,
+    depth_bins,
+    time_order_keys,
+    validate_columns,
+)
 
 __all__ = [
     "BookLevels",
@@ -530,9 +538,9 @@ class DepthSummaryEngine:
         # before sizes were integers -- is left alone, because rounding it onto
         # a lot grid would truncate a sub-lot size such as 0.5 to zero and lose
         # the level rather than report it.
-        exact = {"best_bid_price", "best_ask_price"}
+        exact = set(DEPTH_SUMMARY.columns_of(col_names, PRICE))
         if np.issubdtype(np.asarray(volumes).dtype, np.integer):
-            exact |= {name for name in col_names if "vol" in name}
+            exact |= set(DEPTH_SUMMARY.columns_of(col_names, SIZE))
 
         # Each column is converted as it is lifted out of the row buffer, which
         # is one float64 matrix because it also holds the scale-free bps
@@ -625,17 +633,16 @@ class DepthSummaryEngine:
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _column_names(self) -> list[str]:
-        bps, bins = self._bps, self._bins
-
-        def pct_names(name: str) -> list[str]:
-            return [f"{name}{i}bps" for i in range(bps, bps * bins + 1, bps)]
-
-        return (
-            ["best_bid_price", "best_bid_vol"]
-            + pct_names("bid_vol")
-            + ["best_ask_price", "best_ask_vol"]
-            + pct_names("ask_vol")
-        )
+        distances = range(self._bps, self._bps * self._bins + 1, self._bps)
+        return [
+            name
+            for side in DEPTH_BIN_SIDES
+            for name in (
+                f"best_{side}_price",
+                f"best_{side}_vol",
+                *(depth_bin_name(side, bps) for bps in distances),
+            )
+        ]
 
 
 # ── Standalone functions ──────────────────────────────────────────────
@@ -1307,36 +1314,6 @@ def _readable_mid(quotes: pd.DataFrame) -> np.ndarray:
 # and OBI can also cumulate the per-bps depth-bin volume columns.
 
 
-def bin_volume_columns(depth_summary: pd.DataFrame, side: str) -> list[str]:
-    """Return the per-bps depth-bin volume columns for *side*, touch outward.
-
-    These are the ``{side}_vol{N}bps`` aggregates written by
-    :class:`DepthSummaryEngine` -- each the resting volume in one bps ring out
-    from the touch.  They are discovered from the frame and ordered by their
-    bps distance rather than assumed, so a summary built with a non-default
-    ``bps``/``bins`` configuration is handled correctly.
-
-    Parameters
-    ----------
-    depth_summary : pandas.DataFrame
-        Depth summary produced by :func:`summarize_depth`.
-    side : str
-        ``"bid"`` or ``"ask"``.
-
-    Returns
-    -------
-    list of str
-        Matching column names, ordered from the touch outward.
-    """
-    pattern = re.compile(rf"^{side}_vol(\d+)bps$")
-    matched: list[tuple[int, str]] = []
-    for column in depth_summary.columns:
-        found = pattern.match(column)
-        if found is not None:
-            matched.append((int(found.group(1)), column))
-    return [column for _, column in sorted(matched)]
-
-
 def depth_bands(
     depth_summary: pd.DataFrame, *, interval: str | None = None
 ) -> pd.DataFrame:
@@ -1375,14 +1352,16 @@ def depth_bands(
         bands differ, or the volumes are integers and the frame carries no
         ``lot_size``.
     """
-    bids = bin_volume_columns(depth_summary, "bid")
-    asks = bin_volume_columns(depth_summary, "ask")
+    bid_bins = depth_bins(depth_summary.columns, "bid")
+    ask_bins = depth_bins(depth_summary.columns, "ask")
+    bids = [b.column for b in bid_bins]
+    asks = [b.column for b in ask_bins]
     if not bids:
         raise ConfigError(
             "depth_bands: no 'bid_vol<N>bps' columns in depth_summary. "
             f"Columns: {list(depth_summary.columns)}"
         )
-    if [c.removeprefix("bid") for c in bids] != [c.removeprefix("ask") for c in asks]:
+    if [b.bps for b in bid_bins] != [b.bps for b in ask_bins]:
         raise ConfigError(
             f"depth_bands: the bid bands {bids} and the ask bands {asks} differ."
         )
@@ -1525,8 +1504,8 @@ def book_imbalance(depth_summary: pd.DataFrame, levels: int = 1) -> pd.Series:
         bid_vol = depth_summary["best_bid_vol"].to_numpy(dtype=float)
         ask_vol = depth_summary["best_ask_vol"].to_numpy(dtype=float)
     else:
-        bid_cols = bin_volume_columns(depth_summary, "bid")
-        ask_cols = bin_volume_columns(depth_summary, "ask")
+        bid_cols = [b.column for b in depth_bins(depth_summary.columns, "bid")]
+        ask_cols = [b.column for b in depth_bins(depth_summary.columns, "ask")]
         take = levels - 1
         available = min(len(bid_cols), len(ask_cols))
         if take > available:
@@ -1553,8 +1532,8 @@ def imbalance_levels(depth_summary: pd.DataFrame, levels: int) -> int:
     rather than the error :func:`book_imbalance` raises.
     """
     available = min(
-        len(bin_volume_columns(depth_summary, "bid")),
-        len(bin_volume_columns(depth_summary, "ask")),
+        len(depth_bins(depth_summary.columns, "bid")),
+        len(depth_bins(depth_summary.columns, "ask")),
     )
     return max(1, min(levels, available + 1))
 

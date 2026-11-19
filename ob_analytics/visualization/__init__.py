@@ -40,6 +40,7 @@ from typing import Any
 from matplotlib.axes import Axes
 
 from ob_analytics._utils import _UNSET
+from ob_analytics.display import display_result
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _concepts, _data as _viz_data
@@ -228,7 +229,7 @@ __all__ = [
     "RendererRegistry",
     "available_concepts",
     "busiest_window",
-    # Ticks -> quote-currency for low-level plotting (issue #155)
+    # Ticks and lots to display units, from ob_analytics.display
     "display_result",
     "focus_window",
     "format_time_axis",
@@ -251,7 +252,7 @@ def __getattr__(name: str) -> Any:
     imports :func:`plot` from this package; importing them eagerly here would
     create a cycle.  ``prepare`` is re-exported lazily for symmetry.
     """
-    if name in ("plot_result", "available_concepts", "display_result"):
+    if name in ("plot_result", "available_concepts"):
         from ob_analytics.visualization import gallery
 
         return getattr(gallery, name)

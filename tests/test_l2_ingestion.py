@@ -24,7 +24,7 @@ from ob_analytics import (
 from ob_analytics.analytics import order_aggressiveness, set_order_types
 from ob_analytics.bitstamp import BitstampWriter
 from ob_analytics.book import order_book, order_lifecycles
-from ob_analytics.capture_files import DEPTH_COLUMNS
+from ob_analytics.capture_files import DEPTH_CSV_COLUMNS
 from ob_analytics.config import PipelineConfig
 from ob_analytics.databento import DatabentoWriter
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
@@ -414,7 +414,9 @@ class TestDepthCsvWriter:
         out = tmp_path / "out"
         DepthCsvWriter().write({"depth": depth_in}, out)
 
-        assert pd.read_csv(out / "depth.csv").columns.tolist() == list(DEPTH_COLUMNS)
+        assert pd.read_csv(out / "depth.csv").columns.tolist() == list(
+            DEPTH_CSV_COLUMNS
+        )
         depth_out = loader.load(out)
         for column in ("sequence", "origin"):
             pd.testing.assert_series_equal(depth_in[column], depth_out[column])

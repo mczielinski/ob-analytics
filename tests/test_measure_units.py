@@ -25,6 +25,7 @@ import pytest
 from ob_analytics import metrics
 from ob_analytics.cost import amihud, roll_spread, transaction_costs
 from ob_analytics.depth import book_signals
+from ob_analytics.display import display_result
 from ob_analytics.flow_toxicity import (
     kyle_lambda,
     trade_imbalance,
@@ -33,7 +34,6 @@ from ob_analytics.flow_toxicity import (
 )
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.visualization import gallery
-from ob_analytics.visualization.gallery import display_result
 
 
 @pytest.fixture(scope="module")

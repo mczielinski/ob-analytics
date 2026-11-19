@@ -4,11 +4,39 @@ title: Data Contracts
 
 # Data Contracts
 
-Column-list constants and validators defining the DataFrame contracts at
-package boundaries (replaces the old Pydantic `models.py`). Validators check
+The table contracts, the converter to display units, and the validators that
+check a frame at a package boundary. Validators check
 that the required columns are present and that the events and trades columns
 have the dtypes in `EVENT_DTYPES` and `TRADE_DTYPES`; extra columns are
 allowed.
+
+## Table contracts
+
+One contract per table the package returns. Each column has its dtype and says
+whether it is a price, a size or neither. The [schema page](../schema.md)
+describes the same tables.
+
+::: ob_analytics.schemas.TABLES
+
+::: ob_analytics.schemas.Table
+
+::: ob_analytics.schemas.Column
+
+::: ob_analytics.schemas.PRICE
+
+::: ob_analytics.schemas.SIZE
+
+::: ob_analytics.schemas.depth_bins
+
+::: ob_analytics.schemas.DepthBin
+
+::: ob_analytics.schemas.depth_bin_name
+
+## Display units
+
+::: ob_analytics.display.display_result
+
+## Validators and dtypes
 
 ::: ob_analytics.schemas.validate_events_df
 

@@ -14,8 +14,8 @@ from ob_analytics._demos import (
     _lobster_analytics_cards,
     run_bitstamp_demo,
 )
+from ob_analytics.display import display_result
 from ob_analytics.pipeline import PipelineResult
-from ob_analytics.visualization.gallery import display_result
 
 
 @pytest.fixture

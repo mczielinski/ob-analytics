@@ -13,7 +13,7 @@ without a new test.  Each figure must pass three checks:
   prices, give or take their range once more;
 * each size axis is in the instrument's units: what it draws is no larger than
   the sizes the renderer was given, which are in the instrument's units
-  (:func:`~ob_analytics.visualization.gallery.display_result`).
+  (:func:`~ob_analytics.display.display_result`).
 
 An axis is told by its title: ``Time``; a title with the word ``price``; a
 title that names a size, volume or liquidity.  An untitled axis is not
@@ -43,6 +43,7 @@ import pandas as pd
 import pytest
 
 from ob_analytics.bars import bars
+from ob_analytics.display import display_result
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import _concepts, _data, plot
@@ -50,7 +51,6 @@ from ob_analytics.visualization.gallery import (
     PlotSpec,
     bars_card,
     build_gallery_model,
-    display_result,
     trading_halts_card,
 )
 from tests._drawn import drawn

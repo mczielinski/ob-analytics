@@ -74,14 +74,28 @@ Two groups of tables exist.
 | `depth.parquet` | `price_level_volume` | one price level's size after a change |
 | `depth_summary.parquet` | `summarize_depth` | the reconstructed book state at one event |
 
-**Derived records** — engine output computed on demand from `events`. They are
+**Derived records** — tables computed on demand from the core outputs. They are
 not written by default, but they follow a fixed shape and you can save them with
 `save_data` like any frame:
 
 | Record | Produced by | Rows are |
 |---|---|---|
 | order lifecycles | `order_lifecycles` | one order, from placement to outcome |
+| queue positions | `queue_positions` | one order event that keeps a place in a queue |
 | book snapshot | `order_book` | one resting order in the book at a point in time |
+| bars | `bars` | one bar of trades |
+| transaction costs | `transaction_costs` | one trade, with what it cost |
+
+The features table (`features`) has no fixed shape: its columns follow the
+features you ask for.
+
+The code holds the same contracts in
+[`ob_analytics.schemas.TABLES`](api/schemas.md): for each table, its columns in
+order, the pandas dtype of each, and whether the column is a price, a size or
+neither. A test checks this page against them.
+[`display_result`](api/schemas.md#ob_analytics.display.display_result) reads
+the price and size tags to convert a result's tables from ticks and lots to the
+quote currency and the instrument's units.
 
 For a Level-2 (price-level) feed there is no per-order identity, so `events` is
 an empty but schema-valid frame and the derived records do not apply. Read
@@ -312,6 +326,8 @@ provenance columns every loader carries. The pandas dtype of each column is in
 [`EVENT_DTYPES`](api/schemas.md). The empty events table an L2 run returns has
 the same dtypes, so it can be concatenated with an L3 run's events.
 
+<!-- contract: events -->
+
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `event_id` | `int64` | — | no | Unique id for this event (1-based). Join key for a trade's `maker_event_id` / `taker_event_id`. |
@@ -340,6 +356,8 @@ taker provenance. The pandas dtype of each column is in
 [`TRADE_DTYPES`](api/schemas.md); a reader that finds no trades returns an empty
 table with those dtypes.
 
+<!-- contract: trades -->
+
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Trade print time (receive clock). |
@@ -364,6 +382,8 @@ are in the [same-instant order](#same-instant-order), and the optional
 `sequence` and `ingest_seq` columns are carried over from the events when they
 are present.
 
+<!-- contract: depth -->
+
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `event_id` | `int64` | — | no | The event that produced this level change. Present on the L3 path; absent on an L2 feed. |
@@ -382,6 +402,8 @@ best bid and offer plus cumulative resting volume in basis-point bins on each
 side. This is the reconstructed book state over time. Rows are in the
 [same-instant order](#same-instant-order), and each row is the book after the
 event it names.
+
+<!-- contract: depth_summary -->
 
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
@@ -409,6 +431,8 @@ Output of `order_lifecycles`. One row per order, collapsing its events into a
 placement and an outcome. Orders with no `created` row (a pre-existing opening
 book, hidden executions) are excluded.
 
+<!-- contract: lifecycles -->
+
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `id` | `int64` | — | no | Order id. |
@@ -427,6 +451,8 @@ book, hidden executions) are excluded.
 Output of `order_book`. A snapshot of the resting book at one point in time,
 returned as two frames (`bids` and `asks`), each with these columns.
 
+<!-- contract: book -->
+
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `id` | `int64` | — | no | Order id of the resting order. |
@@ -437,6 +463,75 @@ returned as two frames (`bids` and `asks`), each with these columns.
 | `liquidity` | `int64` | lots | no | Cumulative size from the best price down to this order. |
 | `bps` | `double` | basis points | no | Distance from the best price on this side, in bps. |
 
+## Queue positions
+
+Output of `queue_positions`. One row for each order event that leaves the order
+with a place in a queue. A move to a new price has two rows: leaving the old
+level and joining the new one. Hidden orders and market orders have no rows.
+
+<!-- contract: queue -->
+
+| Column | Arrow type | Unit | Null? | Meaning |
+|---|---|---|---|---|
+| `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the event. |
+| `id` | `int64` | — | no | Order id. |
+| `direction` | `string` | — | no | Order side: `bid` or `ask`. |
+| `price` | `int64` | ticks | no | The price level the order is queued at. |
+| `action` | `string` | — | no | `created`, `changed`, or `deleted`. A move reports `deleted` at the old level, then `created` at the new one. |
+| `rank` | `int64` | — | no | Place in the queue, 1 at the front. |
+| `queue_len` | `int64` | — | no | Number of orders in the queue at this level. |
+| `ahead_volume` | `int64` | lots | no | Remaining size of the orders ahead of this one. |
+| `remaining` | `int64` | lots | no | This order's remaining size. |
+| `age_s` | `double` | seconds | no | Time since the order was placed. |
+
+## Bars
+
+Output of `bars`. One row per bar, in time order. Every bar holds at least one
+trade. Prices and sizes keep the units of the trades the bars were cut from:
+ticks and lots on a pipeline result.
+
+<!-- contract: bars -->
+
+| Column | Arrow type | Unit | Null? | Meaning |
+|---|---|---|---|---|
+| `bar` | `int64` | — | no | Bar number, from 0. |
+| `timestamp_start` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the bar's first trade. |
+| `timestamp_end` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Time of the bar's last trade. |
+| `open` | `int64` | ticks | no | Price of the first trade. |
+| `high` | `int64` | ticks | no | Highest trade price. |
+| `low` | `int64` | ticks | no | Lowest trade price. |
+| `close` | `int64` | ticks | no | Price of the last trade. |
+| `volume` | `int64` | lots | no | Total size traded. |
+| `turnover` | `double` | ticks × lots | no | Total price × size. |
+| `n_trades` | `int64` | — | no | Number of trades. |
+| `vwap` | `double` | ticks | no | Volume-weighted average price, `turnover / volume`. |
+| `buy_volume` | `int64` | lots | no | Size bought by takers. |
+| `sell_volume` | `int64` | lots | no | Size sold by takers. |
+| `signed_volume` | `int64` | lots | no | `buy_volume` minus `sell_volume`. |
+
+## Transaction costs
+
+Output of `transaction_costs`. One row per trade, in time order. Prices, mids
+and spreads are in the quote currency and `volume` in the instrument's units,
+as floats, whatever units the trades arrive in.
+
+<!-- contract: costs -->
+
+| Column | Arrow type | Unit | Null? | Meaning |
+|---|---|---|---|---|
+| `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Trade time. |
+| `price` | `double` | quote currency | no | Trade price. |
+| `volume` | `double` | instrument units | no | Trade size. |
+| `direction` | `dictionary<string>` | — | no | Taker's side: `buy` or `sell`. |
+| `mid_price` | `double` | quote currency | yes | Mid just before the trade. |
+| `future_mid_price` | `double` | quote currency | yes | Mid one horizon after the trade. Null near the end of the capture. |
+| `effective_spread` | `double` | quote currency | yes | Twice the signed distance from the mid to the trade price. |
+| `realized_spread` | `double` | quote currency | yes | Twice the signed distance from the future mid to the trade price. |
+| `price_impact` | `double` | quote currency | yes | Twice the signed move of the mid over the horizon. |
+| `effective_spread_bps` | `double` | basis points | yes | `effective_spread` over the mid. |
+| `realized_spread_bps` | `double` | basis points | yes | `realized_spread` over the mid. |
+| `price_impact_bps` | `double` | basis points | yes | `price_impact` over the mid. |
+
 ## Categorical value domains
 
 Three categorical columns are **ordered**; the order is the category order, not
@@ -444,11 +539,14 @@ alphabetical.
 
 | Column | Table | Values (in order) |
 |---|---|---|
-| `direction` | events, depth, book snapshot | `bid`, `ask` |
-| `direction` | trades | `buy`, `sell` |
+| `direction` | events, depth, lifecycles | `bid`, `ask` |
+| `direction` | trades, transaction costs | `buy`, `sell` |
 | `action` | events | `created`, `changed`, `deleted` |
 | `type` | events, lifecycles | `unknown`, `pre-existing`, `cancelled-limit`, `resting-limit`, `market-limit`, `market` |
 | `outcome` | lifecycles | `filled`, `partial`, `cancelled`, `resting` (plain string, not categorical) |
+
+The queue table's `direction` and `action` hold the same values as plain
+strings, not categoricals.
 
 An ordered categorical is stored as an Arrow `dictionary<string>` (the categories
 plus small integer indices). A reader that does not want dictionary encoding can

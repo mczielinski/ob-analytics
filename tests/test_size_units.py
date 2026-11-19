@@ -1,7 +1,7 @@
 """Size and price settings are in the instrument's own units, however called.
 
 A pipeline result stores sizes as whole lots and prices as whole ticks, while
-a display frame (:func:`~ob_analytics.visualization.display_result`) holds
+a display frame (:func:`~ob_analytics.display.display_result`) holds
 them as floats in BTC and dollars.  A setting a user types (a VPIN bucket, a
 bar threshold, a price correction) means the same amount on either frame.
 """
@@ -27,9 +27,10 @@ from ob_analytics import (
 from ob_analytics.datasets import toy_l2_depth, toy_l2_trades
 from ob_analytics.depth import micro_price
 from ob_analytics.depth_csv import DepthCsvWriter
+from ob_analytics.display import display_result
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.metrics import get_metric
-from ob_analytics.visualization.gallery import _metric_payload, display_result
+from ob_analytics.visualization.gallery import _metric_payload
 from tests._drawn import drawn
 
 FRAMES = ("events", "trades", "depth", "depth_summary")

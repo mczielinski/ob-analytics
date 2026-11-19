@@ -21,7 +21,8 @@ it to a self-contained HTML page.
 
 ::: ob_analytics.visualization.gallery.available_concepts
 
-::: ob_analytics.visualization.gallery.display_result
+To convert a result to display units yourself, use
+[`display_result`](schemas.md#ob_analytics.display.display_result).
 
 ## Gallery model
 
