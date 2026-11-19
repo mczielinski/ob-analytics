@@ -66,7 +66,7 @@ def _events(rows: list[tuple[str, str, int, int, int]]) -> pd.DataFrame:
             "direction": [r[1] for r in rows],
             "action": [r[0] for r in rows],
             "fill": 0,
-            "type": "flashed-limit",
+            "type": "cancelled-limit",
         }
     )
 

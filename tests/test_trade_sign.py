@@ -2,7 +2,7 @@
 
 Includes the #107 acceptance harness: on the bundled L3 Bitstamp sample the
 per-trade classifiers must agree with the true maker/taker side well above
-chance, and VPIN / OFI must run end-to-end once the native ``direction`` is
+chance, and VPIN / trade imbalance must run end-to-end once the native ``direction`` is
 stripped (the L2 / aggregated-feed scenario).
 """
 
@@ -15,7 +15,7 @@ import pytest
 from ob_analytics.exceptions import ConfigError, ObAnalyticsError
 from ob_analytics.flow_toxicity import (
     kyle_lambda,
-    order_flow_imbalance,
+    trade_imbalance,
     vpin,
 )
 from ob_analytics.trade_sign import (
@@ -248,7 +248,7 @@ class TestTheQuoteATradeArrivedInto:
 class TestResolveDirection:
     """The column it returns holds only buy and sell -- see the docstring.
 
-    Every consumer (`vpin`, `order_flow_imbalance`, `bars`, the cost
+    Every consumer (`vpin`, `trade_imbalance`, `bars`, the cost
     metrics) reads the column as ``== "buy"`` and takes everything else as a
     sell, so a value that is neither is not a gap to them: it is the wrong
     side.  These tests hold the guarantee that makes that idiom safe.
@@ -378,7 +378,7 @@ class TestThePipelineFillsDirectionsLikeResolveDirection:
 
 
 class TestPartlyLabelledFeedReachesTheMetrics:
-    """The guarantee is what `vpin`, `ofi` and `bars` actually depend on."""
+    """The guarantee is what `vpin`, `trade_imbalance` and `bars` actually depend on."""
 
     @staticmethod
     def _half_labelled():
@@ -388,11 +388,11 @@ class TestPartlyLabelledFeedReachesTheMetrics:
         trades["direction"] = ["buy"] * 5 + [None] * 5
         return trades
 
-    def test_ofi_does_not_count_the_blanks_as_sells(self):
-        ofi = order_flow_imbalance(self._half_labelled(), window="1min")
+    def test_trade_imbalance_does_not_count_the_blanks_as_sells(self):
+        imbalance = trade_imbalance(self._half_labelled(), window="1min")
 
-        assert float(ofi["sell_volume"].iloc[0]) == 0.0
-        assert float(ofi["ofi"].iloc[0]) == pytest.approx(1.0)
+        assert float(imbalance["sell_volume"].iloc[0]) == 0.0
+        assert float(imbalance["trade_imbalance"].iloc[0]) == pytest.approx(1.0)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_vpin_does_not_count_the_blanks_as_sells(self):
@@ -539,18 +539,18 @@ class TestFlowToxicityFallback:
         ]
         assert (got["vpin"].between(0, 1)).all()
 
-    def test_ofi_without_direction_uses_tick(self):
+    def test_trade_imbalance_without_direction_uses_tick(self):
         trades = _trades(self._prices())
-        got = order_flow_imbalance(trades, window="5s")
+        got = trade_imbalance(trades, window="5s")
         seeded = trades.copy()
         seeded["direction"] = classify_trade_sign(trades, sign_method="tick")
-        expected = order_flow_imbalance(seeded, window="5s")
+        expected = trade_imbalance(seeded, window="5s")
         pd.testing.assert_frame_equal(got, expected)
 
-    def test_ofi_bvc_rejected(self):
+    def test_trade_imbalance_bvc_rejected(self):
         trades = _trades(self._prices())
         with pytest.raises(ConfigError, match="only supported by vpin"):
-            order_flow_imbalance(trades, sign_method="bvc")
+            trade_imbalance(trades, sign_method="bvc")
 
     def test_vpin_missing_price_for_classification(self):
         # No direction and no price → the classifier fallback can't run.
@@ -561,7 +561,7 @@ class TestFlowToxicityFallback:
             }
         )
         with pytest.raises(ConfigError):
-            order_flow_imbalance(trades)
+            trade_imbalance(trades)
 
 
 # ── #107 acceptance harness: Bitstamp L3 sample ──────────────────────
@@ -608,9 +608,11 @@ class TestBitstampValidationHarness:
         assert tick_agreement >= _TICK_MIN_AGREEMENT
         assert lee_agreement >= _LEE_READY_MIN_AGREEMENT
 
-    def test_vpin_ofi_run_on_direction_stripped_sample(self, sample_pipeline_result):
+    def test_vpin_trade_imbalance_run_on_direction_stripped_sample(
+        self, sample_pipeline_result
+    ):
         # Simulate an L2 / aggregated capture: same trades + quotes, but with
-        # the native aggressor side removed.  VPIN and OFI must still run.
+        # the native aggressor side removed.  VPIN and trade imbalance must still run.
         res = sample_pipeline_result
         l2_trades = res.trades.drop(columns=["direction"])
         quotes = res.depth_summary[["timestamp", "best_bid_price", "best_ask_price"]]
@@ -636,6 +638,6 @@ class TestBitstampValidationHarness:
         ).table
         assert not vpin_bvc.empty
 
-        ofi = order_flow_imbalance(l2_trades, window="1min")
-        assert not ofi.empty
-        assert ofi["ofi"].between(-1, 1).all()
+        imbalance = trade_imbalance(l2_trades, window="1min")
+        assert not imbalance.empty
+        assert imbalance["trade_imbalance"].between(-1, 1).all()

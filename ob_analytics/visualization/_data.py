@@ -33,10 +33,10 @@ from ob_analytics.depth import (
 )
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.flow_toxicity import (
-    OFI_WINDOWS,
+    TRADE_IMBALANCE_WINDOWS,
     KyleLambdaResult,
     VpinResult,
-    ofi_by_window,
+    trade_imbalance_by_window,
 )
 from ob_analytics.protocols import Level
 from ob_analytics.schemas import validate_columns
@@ -61,7 +61,7 @@ def focus_window(trades: pd.DataFrame, *, k_sigma: float = 3.0) -> FocusWindow:
     """Mid-anchored :class:`FocusWindow`: trades-median ± *k_sigma*·σ.
 
     Trades happen at the touch, so their median anchors the window where
-    the action is; the σ band keeps far-from-touch flashed orders from
+    the action is; the σ band keeps far-from-touch cancelled orders from
     stretching the price axis.  Degenerate tapes (empty, or zero/NaN price
     dispersion) yield an unclipped price axis.
     """
@@ -279,7 +279,7 @@ _VP_HUE_ANCHORS: dict[
 }
 
 
-def _volume_percentile_palette(
+def _depth_band_palette(
     n: int, hue: str = "blue"
 ) -> tuple[tuple[float, float, float, float], ...]:
     """Depth-from-touch gradient for one book side, shared by every backend.
@@ -1254,7 +1254,7 @@ def prepare_order_activity_l3_data(
     start_time, end_time = _default_start_end(events, start_time, end_time)
 
     life = _lifecycles_of(events, lifecycles)
-    life = life[life["type"].isin(["flashed-limit", "resting-limit"])]
+    life = life[life["type"].isin(["cancelled-limit", "resting-limit"])]
 
     # Lifecycles overlapping the window, clipped to it for display.
     overlaps = (life["placed_ts"] <= end_time) & (
@@ -2025,7 +2025,7 @@ def prepare_cancellations_l3_data(
     creation and deletion) against ``distance_from_touch`` (absolute bps from
     the prevailing best at creation), split by side.
 
-    Cancellations are deleted *flashed-limit* orders, matching the L2 face.
+    Cancellations are deleted *cancelled-limit* orders, matching the L2 face.
     The table comes from :func:`~ob_analytics.analytics.cancelled_orders`;
     this step keeps the orders cancelled inside the window and puts both axes
     on a log scale.
@@ -2541,7 +2541,7 @@ def prepare_book_replay_data(
     }
 
 
-def prepare_volume_percentiles_data(
+def prepare_depth_bands_data(
     depth_summary: pd.DataFrame,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
@@ -2550,7 +2550,7 @@ def prepare_volume_percentiles_data(
     *,
     level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
-    """Prepare data for volume-percentile stacked area chart.
+    """Prepare data for depth-band stacked area chart.
 
     The volume in each band comes from :func:`~ob_analytics.depth.depth_bands`,
     averaged over seconds, or over minutes for a window longer than 15
@@ -2560,7 +2560,7 @@ def prepare_volume_percentiles_data(
     ``bids_cumsum_neg`` frames that keep the bin columns; the renderers draw a
     "no data" figure.
     """
-    resolve_level("volume_percentiles", level)
+    resolve_level("depth_bands", level)
     if start_time is None:
         start_time = depth_summary["timestamp"].iloc[0]
     if end_time is None:
@@ -2618,8 +2618,8 @@ def prepare_volume_percentiles_data(
     n_bps = len(bps_levels)
     # Match the package CVD palette used by every other face: bid = blue,
     # ask = orange (was inverted here, the lone exception).
-    ask_pal = list(_volume_percentile_palette(n_bps, hue="orange"))
-    bid_pal = list(_volume_percentile_palette(n_bps, hue="blue"))
+    ask_pal = list(_depth_band_palette(n_bps, hue="orange"))
+    bid_pal = list(_depth_band_palette(n_bps, hue="blue"))
 
     asks_pivot = melted_asks.pivot(
         index="timestamp",
@@ -2689,7 +2689,7 @@ def prepare_events_histogram_data(
     ``price_from``/``price_to`` clip the events to a price window before
     binning.  Without it the price face collapses to a single 1px spike: even
     the 1st-99th percentile of a heavy-tailed book still spans the far-from-
-    touch flashed orders, so the caller passes a mid-anchored focus window (the
+    touch cancelled orders, so the caller passes a mid-anchored focus window (the
     same one the depth heatmap uses) to keep the near-touch distribution legible.
     """
     resolve_level("events_histogram", level)
@@ -2706,7 +2706,7 @@ def prepare_events_histogram_data(
     return {"events": filtered, "val": val, "bw": bw}
 
 
-#: The fewest trades a VPIN bucket or an order-flow-imbalance window needs
+#: The fewest trades a VPIN bucket or a trade-imbalance window needs
 #: before its card draws it.  With only a few trades, one side often takes
 #: all of them, so the value sits at its limit and says little.  When the
 #: table has an ``n_takers`` column, the floor applies to taker orders, since
@@ -2985,22 +2985,22 @@ def _band_range(*series: np.ndarray, floor: float = 3.0) -> tuple[float, float] 
     return low - margin, high + margin
 
 
-def prepare_order_flow_imbalance_data(
-    ofi_df: pd.DataFrame,
+def prepare_trade_imbalance_data(
+    imbalance_df: pd.DataFrame,
     trades: pd.DataFrame | None = None,
     *,
     min_trades: int = MIN_TRADES,
     level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
-    """Prepare data for an order-flow-imbalance bar chart.
+    """Prepare data for a trade-imbalance bar chart.
 
-    Bar colours (the theme's buy / sell split on the sign of the OFI) and bar
-    *width* (which depends on the renderer's x-axis units; matplotlib uses
-    date numbers) are chosen by each backend rather than here.
+    Bar colours (the theme's buy / sell split on the sign of the trade
+    imbalance) and bar *width* (which depends on the renderer's x-axis units;
+    matplotlib uses date numbers) are chosen by each backend rather than here.
 
     A window with fewer than *min_trades* trades (the ``n_trades`` column of
-    :func:`~ob_analytics.flow_toxicity.order_flow_imbalance`) is left out of
-    ``ofi_df``, and ``notice`` says how many were.  When the table has an
+    :func:`~ob_analytics.flow_toxicity.trade_imbalance`) is left out of
+    ``imbalance_df``, and ``notice`` says how many were.  When the table has an
     ``n_takers`` column, the floor counts taker orders instead of trades,
     and the messages say so.  When no window is left, ``too_few`` says so
     and the face draws that message in place of the bars.  A table with
@@ -3008,15 +3008,17 @@ def prepare_order_flow_imbalance_data(
     is the median time between windows before any are left out, so a bar
     stays as wide as its window; it is ``None`` for fewer than two windows.
     """
-    resolve_level("order_flow_imbalance", level)
+    resolve_level("trade_imbalance", level)
     # Taken before thin windows go: the gaps they leave would widen the bars.
-    bar_gap = ofi_df["timestamp"].diff().median() if len(ofi_df) > 1 else None
+    bar_gap = (
+        imbalance_df["timestamp"].diff().median() if len(imbalance_df) > 1 else None
+    )
     notice = ""
     too_few = ""
-    count = _trade_count(ofi_df)
-    if count is not None and not ofi_df.empty:
+    count = _trade_count(imbalance_df)
+    if count is not None and not imbalance_df.empty:
         column, _, what = count
-        enough = ofi_df[column] >= min_trades
+        enough = imbalance_df[column] >= min_trades
         left_out = int((~enough).sum())
         if not enough.any():
             too_few = (
@@ -3025,12 +3027,12 @@ def prepare_order_flow_imbalance_data(
             )
         elif left_out:
             notice = (
-                f"{left_out} of {len(ofi_df)} windows left out: "
+                f"{left_out} of {len(imbalance_df)} windows left out: "
                 f"fewer than {min_trades} {what} each"
             )
-        ofi_df = ofi_df[enough]
+        imbalance_df = imbalance_df[enough]
     return {
-        "ofi_df": ofi_df,
+        "imbalance_df": imbalance_df,
         "trades": trades,
         "notice": notice,
         "too_few": too_few,
@@ -3038,66 +3040,67 @@ def prepare_order_flow_imbalance_data(
     }
 
 
-def prepare_ofi_by_window_data(
+def prepare_trade_imbalance_by_window_data(
     trades: pd.DataFrame,
     *,
-    windows: tuple[str, ...] = OFI_WINDOWS,
+    windows: tuple[str, ...] = TRADE_IMBALANCE_WINDOWS,
     grid: str = "5s",
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
     level: Level | str | None = _UNSET,
 ) -> dict[str, Any]:
-    """Order flow imbalance over several trailing windows, for the horizon graph.
+    """Trade imbalance over several trailing windows, for the horizon graph.
 
-    A single OFI line shows one window; this computes OFI over several trailing
-    *windows* on one *grid* (:func:`~ob_analytics.flow_toxicity.ofi_by_window`)
-    from the trades between *start_time* and *end_time*, so pressure over short
-    and long windows can be compared at a glance.  Each row is a window;
-    the value is OFI in ``[-1, +1]`` (buy pressure positive), rendered as a
+    A single trade imbalance line shows one window; this computes trade
+    imbalance over several trailing *windows* on one *grid*
+    (:func:`~ob_analytics.flow_toxicity.trade_imbalance_by_window`) from the
+    trades between *start_time* and *end_time*, so pressure over short and
+    long windows can be compared at a glance.  Each row is a window; the value
+    is trade imbalance in ``[-1, +1]`` (buy pressure positive), rendered as a
     stacked horizon-graph band per row.
 
-    Returns ``ofi`` (a ``len(windows)`` x ``n_grid`` array, longest window
+    Returns ``trade_imbalance`` (a ``len(windows)`` x ``n_grid`` array, longest window
     last so it plots at the top), ``times`` (grid timestamps), ``windows``,
     and the fill of each colour band: ``band_alphas``, ``buy_bands`` and
     ``sell_bands``, the height of each band as a fraction of its row.
     """
-    resolve_level("ofi_by_window", level)
+    resolve_level("trade_imbalance_by_window", level)
     start_time, end_time = _default_start_end(trades, start_time, end_time)
     tr = trades[(trades["timestamp"] >= start_time) & (trades["timestamp"] <= end_time)]
     if tr.empty:
         return {
-            "ofi": np.empty((0, 0)),
+            "trade_imbalance": np.empty((0, 0)),
             "times": np.array([], dtype="datetime64[ns]"),
             "windows": list(windows),
             **_horizon_bands(np.empty((0, 0))),
         }
-    return prepare_ofi_by_window_grid_data(
-        ofi_by_window(tr, windows=windows, grid=grid)
+    return prepare_trade_imbalance_by_window_grid_data(
+        trade_imbalance_by_window(tr, windows=windows, grid=grid)
     )
 
 
-def prepare_ofi_by_window_grid_data(
+def prepare_trade_imbalance_by_window_grid_data(
     grid: pd.DataFrame,
     *,
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
 ) -> dict[str, Any]:
-    """The OFI horizon graph payload from an already computed grid.
+    """The trade imbalance horizon graph payload from an already computed grid.
 
-    *grid* is a :func:`~ob_analytics.flow_toxicity.ofi_by_window` table:
+    *grid* is a :func:`~ob_analytics.flow_toxicity.trade_imbalance_by_window` table:
     ``timestamp`` and one column per window.  Returns the same payload as
-    :func:`prepare_ofi_by_window_data`, for the grid steps between *start_time*
-    and *end_time*.
+    :func:`prepare_trade_imbalance_by_window_data`, for the grid steps between
+    *start_time* and *end_time*.
     """
     start_time, end_time = _default_start_end(grid, start_time, end_time)
     rows = grid[(grid["timestamp"] >= start_time) & (grid["timestamp"] <= end_time)]
     windows = [c for c in grid.columns if c != "timestamp"]
-    ofi = rows[windows].to_numpy(dtype=float).T.reshape(len(windows), -1)
+    imbalance = rows[windows].to_numpy(dtype=float).T.reshape(len(windows), -1)
     return {
-        "ofi": ofi,
+        "trade_imbalance": imbalance,
         "times": pd.DatetimeIndex(rows["timestamp"]).to_numpy(),
         "windows": windows,
-        **_horizon_bands(ofi),
+        **_horizon_bands(imbalance),
     }
 
 
@@ -3105,22 +3108,22 @@ def prepare_ofi_by_window_grid_data(
 HORIZON_BANDS = 3
 
 
-def _horizon_bands(ofi: np.ndarray) -> dict[str, Any]:
-    """The fill of each colour band of the OFI horizon graph.
+def _horizon_bands(imbalance: np.ndarray) -> dict[str, Any]:
+    """The fill of each colour band of the trade imbalance horizon graph.
 
     A horizon graph folds a row's value into :data:`HORIZON_BANDS` bands of
     equal width that are drawn on top of each other, each darker than the
-    one below.  Band *b* holds the part of ``|ofi|`` between ``b / n`` and
+    one below.  Band *b* holds the part of ``|imbalance|`` between ``b / n`` and
     ``(b + 1) / n``, stretched to the full row height, so the row is filled
     as far as the value reaches and the colour darkens as it grows.
 
     Returns ``band_alphas`` (the opacity of each band, lightest first), and
     ``buy_bands`` and ``sell_bands``: arrays of shape ``(rows, bands,
     steps)`` with each band's height as a fraction of the row, for net
-    buying (positive OFI) and net selling.
+    buying (positive trade imbalance) and net selling.
     """
     n = HORIZON_BANDS
-    value = np.clip(np.nan_to_num(ofi), -1.0, 1.0)
+    value = np.clip(np.nan_to_num(imbalance), -1.0, 1.0)
     lows = np.arange(n) / n
 
     def fill(signed: np.ndarray) -> np.ndarray:

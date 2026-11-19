@@ -661,7 +661,7 @@ on `prepare`. `result.plot(name, **kwargs)` sends each keyword to the method
 that names it, so the two must not share a name.
 
 Nine metrics ship registered: `l1_ticker`, `book_signals`, `vpin`,
-`kyle_lambda`, `order_flow_imbalance`, `ofi_by_window`, `transaction_costs`,
+`kyle_lambda`, `trade_imbalance`, `trade_imbalance_by_window`, `transaction_costs`,
 `amihud` and `roll_spread` (see [the metric list](api/metrics.md)). Each wraps
 a plain function you can still call directly, such as
 [`vpin`](api/flow_toxicity.md) or [`amihud`](api/cost.md).

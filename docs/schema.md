@@ -447,7 +447,7 @@ alphabetical.
 | `direction` | events, depth, book snapshot | `bid`, `ask` |
 | `direction` | trades | `buy`, `sell` |
 | `action` | events | `created`, `changed`, `deleted` |
-| `type` | events, lifecycles | `unknown`, `pre-existing`, `flashed-limit`, `resting-limit`, `market-limit`, `market` |
+| `type` | events, lifecycles | `unknown`, `pre-existing`, `cancelled-limit`, `resting-limit`, `market-limit`, `market` |
 | `outcome` | lifecycles | `filled`, `partial`, `cancelled`, `resting` (plain string, not categorical) |
 
 An ordered categorical is stored as an Arrow `dictionary<string>` (the categories

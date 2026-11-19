@@ -1,7 +1,7 @@
 """Count taker orders, not trades, toward the card floor (issue #532).
 
 On an L3 feed one taker order that fills many resting orders makes many
-trades.  The order flow imbalance and VPIN tables add ``n_takers`` when the
+trades.  The trade imbalance and VPIN tables add ``n_takers`` when the
 trades name their takers, and the cards apply ``MIN_TRADES`` to it.
 """
 
@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ob_analytics import bulk_volume_classification, order_flow_imbalance, vpin
+from ob_analytics import bulk_volume_classification, trade_imbalance, vpin
 from ob_analytics.visualization import prepare
 from ob_analytics.visualization._data import MIN_TRADES
 
@@ -57,59 +57,55 @@ def _l2_tape() -> pd.DataFrame:
     return _l3_tape().drop(columns=["maker", "taker"])
 
 
-# ── Order flow imbalance ─────────────────────────────────────────────
+# ── Trade imbalance ──────────────────────────────────────────────────
 
 
 class TestImbalanceCountsTakers:
     def test_one_taker_filling_many_makers_counts_once(self) -> None:
-        ofi = order_flow_imbalance(_l3_tape(), window="1min")
-        assert list(ofi["n_trades"]) == [12, 12]
-        assert list(ofi["n_takers"]) == [1, 12]
-        assert list(ofi.columns).index("n_takers") == (
-            list(ofi.columns).index("n_trades") + 1
+        imbalance = trade_imbalance(_l3_tape(), window="1min")
+        assert list(imbalance["n_trades"]) == [12, 12]
+        assert list(imbalance["n_takers"]) == [1, 12]
+        assert list(imbalance.columns).index("n_takers") == (
+            list(imbalance.columns).index("n_trades") + 1
         )
 
     def test_a_trade_with_no_taker_id_counts_as_its_own(self) -> None:
         tape = _l3_tape()
         tape.loc[[0, 1, 2], "taker"] = pd.NA
-        ofi = order_flow_imbalance(tape, window="1min")
+        imbalance = trade_imbalance(tape, window="1min")
         # Three unknown takers plus "big".
-        assert list(ofi["n_takers"]) == [4, 12]
+        assert list(imbalance["n_takers"]) == [4, 12]
 
     def test_an_l2_tape_has_no_taker_count(self) -> None:
-        ofi = order_flow_imbalance(_l2_tape(), window="1min")
-        assert "n_takers" not in ofi.columns
-        assert list(ofi["n_trades"]) == [12, 12]
+        imbalance = trade_imbalance(_l2_tape(), window="1min")
+        assert "n_takers" not in imbalance.columns
+        assert list(imbalance["n_trades"]) == [12, 12]
 
     def test_a_taker_column_with_no_ids_is_ignored(self) -> None:
         tape = _l3_tape()
         tape["taker"] = pd.NA
-        assert "n_takers" not in order_flow_imbalance(tape, window="1min").columns
+        assert "n_takers" not in trade_imbalance(tape, window="1min").columns
 
     def test_a_repeated_index_does_not_change_the_count(self) -> None:
         tape = _l3_tape()
         tape.index = [0] * len(tape)
-        assert list(order_flow_imbalance(tape, window="1min")["n_takers"]) == [1, 12]
+        assert list(trade_imbalance(tape, window="1min")["n_takers"]) == [1, 12]
 
     def test_the_card_leaves_out_the_window_with_one_taker(self) -> None:
-        payload = prepare.order_flow_imbalance(
-            order_flow_imbalance(_l3_tape(), window="1min")
-        )
-        assert list(payload["ofi_df"]["n_takers"]) == [12]
+        payload = prepare.trade_imbalance(trade_imbalance(_l3_tape(), window="1min"))
+        assert list(payload["imbalance_df"]["n_takers"]) == [12]
         assert payload["notice"] == (
             f"1 of 2 windows left out: fewer than {MIN_TRADES} taker orders each"
         )
 
     def test_the_card_counts_trades_on_an_l2_tape(self) -> None:
-        payload = prepare.order_flow_imbalance(
-            order_flow_imbalance(_l2_tape(), window="1min")
-        )
-        assert len(payload["ofi_df"]) == 2
+        payload = prepare.trade_imbalance(trade_imbalance(_l2_tape(), window="1min"))
+        assert len(payload["imbalance_df"]) == 2
         assert payload["notice"] == ""
 
     def test_too_few_names_taker_orders(self) -> None:
         tape = _l3_tape().iloc[:12]
-        payload = prepare.order_flow_imbalance(order_flow_imbalance(tape))
+        payload = prepare.trade_imbalance(trade_imbalance(tape))
         assert payload["too_few"].startswith("Too few taker orders")
         assert f"No window holds {MIN_TRADES} taker orders" in payload["too_few"]
 
@@ -117,11 +113,13 @@ class TestImbalanceCountsTakers:
         self, bundled_sample_result
     ) -> None:
         trades = bundled_sample_result.trades
-        ofi = order_flow_imbalance(trades)
+        imbalance = trade_imbalance(trades)
         # The sample is L3: some windows pass on trades but not on takers.
-        assert ((ofi["n_trades"] >= MIN_TRADES) & (ofi["n_takers"] < MIN_TRADES)).any()
-        payload = prepare.order_flow_imbalance(ofi)
-        kept = payload["ofi_df"]
+        assert (
+            (imbalance["n_trades"] >= MIN_TRADES) & (imbalance["n_takers"] < MIN_TRADES)
+        ).any()
+        payload = prepare.trade_imbalance(imbalance)
+        kept = payload["imbalance_df"]
         assert not kept.empty
         assert (kept["n_takers"] >= MIN_TRADES).all()
         assert "taker orders each" in payload["notice"]

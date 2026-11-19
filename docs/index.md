@@ -74,10 +74,10 @@ scale envelope.
 |-------|-------------|
 | **Load & normalize** | Parse Bitstamp CSV or LOBSTER message file into a uniform event DataFrame |
 | **Build trades** | Bitstamp: companion `trades.csv`. LOBSTER: execution rows (types 4/5) in the message file |
-| **Classify orders** | Label as market, resting-limit, flashed-limit, market-limit, or unknown |
+| **Classify orders** | Label as market, resting-limit, cancelled-limit, market-limit, or unknown |
 | **Depth & metrics** | Price-level volume, best bid/ask, spread, liquidity in BPS bins |
-| **Flow toxicity** *(post-run)* | VPIN, Kyle's lambda, order-flow imbalance from `result.trades` |
-| **Bars** *(post-run)* | Resample `result.trades` into OHLCV rows by the clock, trade count, volume, turnover, or order-flow imbalance |
+| **Flow toxicity** *(post-run)* | VPIN, Kyle's lambda, trade imbalance from `result.trades` |
+| **Bars** *(post-run)* | Resample `result.trades` into OHLCV rows by the clock, trade count, volume, turnover, or trade imbalance |
 | **Transaction cost** *(post-run)* | Effective and realized spread, price impact, Amihud illiquidity, Roll's implied spread |
 | **Feature table** *(post-run)* | One row per bar, one column per measurement — spread, depth, imbalance, micro-price, signed volume, toxicity — with no look-ahead |
 | **Visualize / export** | Depth heatmaps, event maps, trade charts, galleries; Matplotlib or Plotly; Parquet and LOBSTER round-trip I/O |

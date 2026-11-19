@@ -20,10 +20,10 @@ Nine metrics ship with the package and are registered on import:
 * ``"vpin"`` — VPIN (:func:`~ob_analytics.flow_toxicity.vpin`).
 * ``"kyle_lambda"`` — Kyle's λ
   (:func:`~ob_analytics.flow_toxicity.kyle_lambda`).
-* ``"order_flow_imbalance"`` — order flow imbalance per window
-  (:func:`~ob_analytics.flow_toxicity.order_flow_imbalance`).
-* ``"ofi_by_window"`` — order flow imbalance over several windows
-  (:func:`~ob_analytics.flow_toxicity.ofi_by_window`).
+* ``"trade_imbalance"`` — trade imbalance per window
+  (:func:`~ob_analytics.flow_toxicity.trade_imbalance`).
+* ``"trade_imbalance_by_window"`` — trade imbalance over several windows
+  (:func:`~ob_analytics.flow_toxicity.trade_imbalance_by_window`).
 * ``"transaction_costs"`` — effective and realized spread and price impact
   per trade (:func:`~ob_analytics.cost.transaction_costs`).
 * ``"amihud"`` — Amihud illiquidity (:func:`~ob_analytics.cost.amihud`).
@@ -57,12 +57,12 @@ from ob_analytics._utils import price_scale, size_scale
 from ob_analytics.cost import amihud, roll_spread, transaction_costs
 from ob_analytics.depth import _quoted, book_signals, get_spread, imbalance_levels
 from ob_analytics.flow_toxicity import (
-    OFI_WINDOWS,
+    TRADE_IMBALANCE_WINDOWS,
     KyleLambdaResult,
     VpinResult,
-    _ofi_windows,
+    _trade_imbalance_windows,
     kyle_lambda,
-    ofi_by_window,
+    trade_imbalance_by_window,
     vpin,
 )
 from ob_analytics.protocols import Level, Metric
@@ -72,9 +72,9 @@ __all__ = [
     "BookSignalsMetric",
     "KyleLambdaMetric",
     "L1TickerMetric",
-    "OfiByWindowMetric",
-    "OrderFlowImbalanceMetric",
     "RollSpreadMetric",
+    "TradeImbalanceByWindowMetric",
+    "TradeImbalanceMetric",
     "TransactionCostsMetric",
     "VpinMetric",
     "applicable_metrics",
@@ -429,15 +429,15 @@ class KyleLambdaMetric:
         )
 
 
-class OrderFlowImbalanceMetric:
-    """Order flow imbalance, from :func:`~ob_analytics.flow_toxicity.order_flow_imbalance`.
+class TradeImbalanceMetric:
+    """Trade imbalance, from :func:`~ob_analytics.flow_toxicity.trade_imbalance`.
 
     The table adds ``last_price``, the last trade price in each window in the
     quote currency, which the face draws as a price line behind the bars.
     """
 
-    name = "order_flow_imbalance"
-    title = "Order Flow Imbalance"
+    name = "trade_imbalance"
+    title = "Trade Imbalance"
     levels: tuple[Level, ...] = _EVERY_LEVEL
     needs: tuple[str, ...] = ("trades",)
 
@@ -448,13 +448,15 @@ class OrderFlowImbalanceMetric:
         window: str = "1min",
         sign_method: str | None = None,
     ) -> pd.DataFrame:
-        """Return the per-window table; the settings are ``order_flow_imbalance``'s."""
+        """Return the per-window table; the settings are ``trade_imbalance``'s."""
         # The same time bars that cut the windows give each one's last price;
         # the bars keep the trades' units, so the price is converted here.
         trades = result.trades
-        frame, windows = _ofi_windows(trades, window, sign_method, result.depth_summary)
+        frame, windows = _trade_imbalance_windows(
+            trades, window, sign_method, result.depth_summary
+        )
         close = windows["close"].to_numpy(dtype=float)
-        return frame.assign(last_price=close / price_scale(trades, "ofi"))
+        return frame.assign(last_price=close / price_scale(trades, "trade_imbalance"))
 
     def prepare(
         self, frame: pd.DataFrame, *, min_trades: int | None = None
@@ -463,25 +465,23 @@ class OrderFlowImbalanceMetric:
 
         *min_trades* is the fewest trades a window must hold to be drawn,
         counted as taker orders when the table has ``n_takers``; ``None``
-        uses ``prepare_order_flow_imbalance_data``'s default.
+        uses ``prepare_trade_imbalance_data``'s default.
         """
-        from ob_analytics.visualization._data import prepare_order_flow_imbalance_data
+        from ob_analytics.visualization._data import prepare_trade_imbalance_data
 
         prices = frame[["timestamp", "last_price"]].rename(
             columns={"last_price": "price"}
         )
         if min_trades is None:
-            return prepare_order_flow_imbalance_data(frame, trades=prices)
-        return prepare_order_flow_imbalance_data(
-            frame, trades=prices, min_trades=min_trades
-        )
+            return prepare_trade_imbalance_data(frame, trades=prices)
+        return prepare_trade_imbalance_data(frame, trades=prices, min_trades=min_trades)
 
 
-class OfiByWindowMetric:
-    """Order flow imbalance over several windows, from :func:`~ob_analytics.flow_toxicity.ofi_by_window`."""
+class TradeImbalanceByWindowMetric:
+    """Trade imbalance over several windows, from :func:`~ob_analytics.flow_toxicity.trade_imbalance_by_window`."""
 
-    name = "ofi_by_window"
-    title = "Order Flow Imbalance by Window"
+    name = "trade_imbalance_by_window"
+    title = "Trade Imbalance by Window"
     levels: tuple[Level, ...] = _EVERY_LEVEL
     needs: tuple[str, ...] = ("trades",)
 
@@ -489,12 +489,12 @@ class OfiByWindowMetric:
         self,
         result: Any,
         *,
-        windows: tuple[str, ...] = OFI_WINDOWS,
+        windows: tuple[str, ...] = TRADE_IMBALANCE_WINDOWS,
         grid: str = "5s",
         sign_method: str | None = None,
     ) -> pd.DataFrame:
-        """Return the grid table; the settings are ``ofi_by_window``'s."""
-        return ofi_by_window(
+        """Return the grid table; the settings are ``trade_imbalance_by_window``'s."""
+        return trade_imbalance_by_window(
             result.trades,
             windows=windows,
             grid=grid,
@@ -510,9 +510,11 @@ class OfiByWindowMetric:
         end_time: pd.Timestamp | None = None,
     ) -> dict[str, Any]:
         """Payload for the horizon graph, for the steps from *start_time* to *end_time*."""
-        from ob_analytics.visualization._data import prepare_ofi_by_window_grid_data
+        from ob_analytics.visualization._data import (
+            prepare_trade_imbalance_by_window_grid_data,
+        )
 
-        return prepare_ofi_by_window_grid_data(
+        return prepare_trade_imbalance_by_window_grid_data(
             frame, start_time=start_time, end_time=end_time
         )
 
@@ -644,8 +646,8 @@ for _metric in (
     BookSignalsMetric(),
     VpinMetric(),
     KyleLambdaMetric(),
-    OrderFlowImbalanceMetric(),
-    OfiByWindowMetric(),
+    TradeImbalanceMetric(),
+    TradeImbalanceByWindowMetric(),
     TransactionCostsMetric(),
     AmihudMetric(),
     RollSpreadMetric(),

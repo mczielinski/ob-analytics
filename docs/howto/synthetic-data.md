@@ -89,7 +89,7 @@ Ogata thinning using numpy only). Everything is driven by one seeded
 `numpy.random.Generator`.
 
 Under the pipeline's order-type classifier the orders come out as
-`resting-limit`, `flashed-limit`, and `market`. The generator does not produce
+`resting-limit`, `cancelled-limit`, and `market`. The generator does not produce
 `market-limit` or `pre-existing` orders: every order has a `created` event and
 no aggressor rests. This is a deliberate simplification.
 

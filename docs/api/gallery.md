@@ -38,7 +38,7 @@ it to a self-contained HTML page.
 ## Extra cards
 
 The built-in [metrics](metrics.md) (the L1 quote, book signals, VPIN, Kyle's
-λ, order flow imbalance, the OFI horizon graph, transaction costs, Amihud
+λ, trade imbalance, the trade imbalance horizon graph, transaction costs, Amihud
 illiquidity and the Roll spread) already have cards, with their default
 settings. To add bars, LOBSTER trading halts, or a metric's plot from a frame
 you computed with other settings, build a card and append it to
@@ -71,7 +71,7 @@ generate_gallery(result, "out/gallery", model=model)
 
 ::: ob_analytics.visualization.gallery.bars_card
 
-::: ob_analytics.visualization.gallery.ofi_by_window_card
+::: ob_analytics.visualization.gallery.trade_imbalance_by_window_card
 
 ::: ob_analytics.visualization.gallery.kyle_lambda_card
 

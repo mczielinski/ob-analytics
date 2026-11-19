@@ -208,8 +208,13 @@ def test_demo_fingerprints(demo_result):
     # agrees with `order_book(..., uncross=True)` at each instant (bid
     # 78,374.00, ask 78,375.00) and did not before.  `events` follows through
     # `aggressiveness_bps` on 3,858 rows.
+    # 2026-11-18 (#506, the order type `flashed-limit` is renamed
+    # `cancelled-limit`): only `events` moves, and only in the `type` label,
+    # on 312,986 of 314,057 rows.  With `cancelled-limit` mapped back to
+    # `flashed-limit`, `events` hashes to the old digest.  `trades`, `depth` and
+    # `depth_summary` are unchanged.
     EXPECTED: dict[str, str] = {
-        "events": "4465fcd2d31b6683228b3cc3807baa846032f7252e87ac78c19f0b83f34a576a",
+        "events": "8a1598abb8d993bf9ac239e7ef20bb19d356cf94b7dbb625fbbf2dfb3877b832",
         "trades": "492a83736f801d08be3c3ebac1e4ca4dde6010a6b324082600d1f3d01b4eb7b7",
         "depth": "2deeef0fe9c009ef0d1dea7bbb1297c4c0523500703e7972040be449b2b8149d",
         "depth_summary": "2ec4be96458bcc6029e00204f3ff72ac6efa0c9a76175493eaba0aec595da781",

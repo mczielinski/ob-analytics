@@ -15,9 +15,9 @@ quantifying price impact.
 
 ::: ob_analytics.flow_toxicity.kyle_lambda
 
-::: ob_analytics.flow_toxicity.order_flow_imbalance
+::: ob_analytics.flow_toxicity.trade_imbalance
 
-::: ob_analytics.flow_toxicity.ofi_by_window
+::: ob_analytics.flow_toxicity.trade_imbalance_by_window
 
 ## Models
 
@@ -37,4 +37,4 @@ quantifying price impact.
 [`MAX_VOLUME_BUCKETS`](trade_sign.md#ob_analytics.trade_sign.MAX_VOLUME_BUCKETS)
 buckets.
 
-::: ob_analytics.flow_toxicity.OFI_WINDOWS
+::: ob_analytics.flow_toxicity.TRADE_IMBALANCE_WINDOWS

@@ -126,7 +126,7 @@ def _canonical_events() -> pd.DataFrame:
                 categories=[
                     "unknown",
                     "pre-existing",
-                    "flashed-limit",
+                    "cancelled-limit",
                     "resting-limit",
                     "market-limit",
                     "market",

@@ -58,7 +58,7 @@ What it contains, by design:
   and is later filled by Iris at t=52);
 * a **flash** (Eve posts and pulls within 800 ms) and a **plain
   cancellation** (Dana at t=40 — note the classifier labels any
-  unfilled create-then-cancel ``flashed-limit`` regardless of resting
+  unfilled create-then-cancel ``cancelled-limit`` regardless of resting
   time, so Dana and Eve classify identically);
 * **resting limits** that never trade (Chen, Erin, Gus survive to the
   end of the stream).
@@ -72,7 +72,7 @@ the session you wrote.
 Under :func:`~ob_analytics.analytics.set_order_types` the twelve orders
 classify with no ``unknown`` leftovers: Alice, Bob, Chen, Ivy, Erin, Gus
 → ``resting-limit``; Frank, Iris, Sam → ``market``; Hana →
-``market-limit``; Dana, Eve → ``flashed-limit``.
+``market-limit``; Dana, Eve → ``cancelled-limit``.
 
 At t=30 the book is: bids 4 @ 99 (Alice 2, Ivy 2) and 4 @ 98 (Chen 1,
 Dana 3); asks 2 @ 101 (Bob) and 2 @ 102 (Erin). Best bid 99, best ask
@@ -222,7 +222,7 @@ def toy_events() -> pd.DataFrame:
     >>> from ob_analytics.analytics import set_order_types
     >>> events = set_order_types(toy_events(), toy_trades())
     >>> sorted(events["type"].unique().dropna().astype(str))  # doctest: +SKIP
-    ['flashed-limit', 'market', 'market-limit', 'resting-limit']
+    ['cancelled-limit', 'market', 'market-limit', 'resting-limit']
     """
     return _events_frame(_EVENTS, _ACTOR_IDS)
 

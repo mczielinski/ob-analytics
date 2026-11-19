@@ -60,8 +60,8 @@ def order_lifecycles(events: pd.DataFrame) -> pd.DataFrame:
         * ``end_ts`` — termination time (``NaT`` while still resting;
           callers clip to their window end for display).
         * ``outcome`` — ``filled`` / ``partial`` / ``cancelled`` /
-          ``resting``.  Flashed orders are the ``cancelled`` subset whose
-          ``type`` is ``flashed-limit``.
+          ``resting``.  When ``type`` comes from the classifier, every
+          ``cancelled-limit`` order has the outcome ``cancelled``.
         * ``aggressiveness_bps`` — placement distance (when present).
     """
     validate_columns(

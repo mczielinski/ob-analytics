@@ -41,7 +41,7 @@ Order types produced
 --------------------
 
 Under :func:`~ob_analytics.analytics.set_order_types` the orders classify as
-``resting-limit`` (passive orders that trade or survive), ``flashed-limit``
+``resting-limit`` (passive orders that trade or survive), ``cancelled-limit``
 (placed and cancelled without trading), and ``market`` (aggressors). The
 generator does not produce ``market-limit`` or ``pre-existing`` orders: every
 order has a ``created`` event and no aggressor rests, which is a deliberate
@@ -56,7 +56,7 @@ Two effects are available and **off by default**:
   refilled slice enters at the back of its price queue (it loses time
   priority), which is the honest L3 footprint of a hidden-size order.
 * **Toxic flow** enlarges a fraction of market orders to model informed takers
-  that consume more liquidity. This raises order-flow imbalance and VPIN.
+  that consume more liquidity. This raises trade imbalance and VPIN.
 
 Both are simplifications intended for teaching and stress tests, documented as
 such.
@@ -295,7 +295,7 @@ def generate_session(
     >>> from ob_analytics.synth import generate_session
     >>> session = generate_session(seed=1, duration=30)
     >>> sorted(session.events["type"].unique().astype(str))  # doctest: +SKIP
-    ['flashed-limit', 'market', 'resting-limit']
+    ['cancelled-limit', 'market', 'resting-limit']
     """
     cfg = config or SynthConfig()
     if overrides:

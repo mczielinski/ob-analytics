@@ -182,7 +182,7 @@ fig = plot_book_keyframes(events, at_s=[39, 41, 45, 46])
 
 # %% [markdown]
 # Dana's departure (t=41 vs t=39) removed liquidity without a single
-# trade printing. Eve's **flashed order** existed for under a second —
+# trade printing. Eve's **short-lived order** existed for under a second —
 # but look at the dashed mid line at t=45: her bid at 100 dragged the
 # mid up to 100.5. *The market's "price" moved and no one traded.* On a
 # trades-only data feed, neither event exists.
@@ -197,12 +197,12 @@ events.groupby("actor", observed=True)["type"].first().sort_values()
 # The four classes: **resting-limit** (posted, waited — filled or still
 # standing), **market** (crossed immediately: Frank, Iris, Sam),
 # **market-limit** (crossed, then the remainder rested: Hana — chapter 2
-# tells her story), and **flashed-limit** (posted and cancelled unfilled:
+# tells her story), and **cancelled-limit** (posted and cancelled unfilled:
 # Dana and Eve).
 #
-# !!! warning "Pitfall: 'flashed' means *unfilled*, not *fast*"
+# !!! warning "Pitfall: `cancelled-limit` says nothing about how long the order lived"
 #     The classifier labels **any** order that was created and fully
-#     cancelled without trading as `flashed-limit` — Dana rested for 32
+#     cancelled without trading as `cancelled-limit` — Dana rested for 32
 #     seconds and gets the same label as Eve's 800 ms.
 #     If your analysis needs true sub-second flashes (quote-stuffing
 #     detection, for instance), filter on lifetime as well as type.

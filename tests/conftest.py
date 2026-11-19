@@ -172,7 +172,7 @@ def tiny_bitstamp_orders_csv(
 
     Hand-crafted to exercise Pipeline.run end-to-end without checking
     real-capture data into the repo. ~12 order events + 4 trades spread
-    over 30 seconds — enough for time-windowed metrics (VPIN/OFI/Kyle)
+    over 30 seconds — enough for time-windowed metrics (VPIN/trade imbalance/Kyle)
     to produce non-empty DataFrames on tiny bucket/window settings.
     Pipeline.run on this fixture is well under a second.
     """
@@ -306,7 +306,7 @@ def write_tiny_bitstamp(d: Path) -> Path:
     orders.to_csv(d / "orders.csv", index=False)
 
     # Trades reference the order IDs above; aggressor side alternates so
-    # OFI/Kyle Lambda see meaningful signed flow.
+    # Trade imbalance/Kyle Lambda see meaningful signed flow.
     trades = pd.DataFrame(
         [
             {
@@ -516,7 +516,7 @@ def tiny_events() -> pd.DataFrame:
 
 @pytest.fixture
 def sample_cancellation_events() -> pd.DataFrame:
-    """Paired created/deleted flashed-limit orders for the L3 cancellations face.
+    """Paired created/deleted cancelled-limit orders for the L3 cancellations face.
 
     Each order ``id`` has a ``created`` row carrying ``aggressiveness_bps``
     (placement distance) and a later ``deleted`` row with the same volume and
@@ -542,7 +542,7 @@ def sample_cancellation_events() -> pd.DataFrame:
                 "fill": 0.0,
                 "direction": direction,
                 "action": "created",
-                "type": "flashed-limit",
+                "type": "cancelled-limit",
                 "aggressiveness_bps": float(rng.uniform(-10.0, 10.0)),
             }
         )
@@ -555,7 +555,7 @@ def sample_cancellation_events() -> pd.DataFrame:
                 "fill": 0.0,
                 "direction": direction,
                 "action": "deleted",
-                "type": "flashed-limit",
+                "type": "cancelled-limit",
                 "aggressiveness_bps": np.nan,
             }
         )
@@ -574,7 +574,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
     Three populations exercise every span branch in
     :func:`~ob_analytics.visualization.prepare.order_activity` at L3:
 
-    - ``flashed-limit`` bids (ids 100-102): created then deleted with unchanged
+    - ``cancelled-limit`` bids (ids 100-102): created then deleted with unchanged
       volume -- placed and pulled (**cancelled**); the span ends at the delete.
     - ``resting-limit`` asks (ids 200-202): created, changed, then deleted --
       rested and provided liquidity before terminating at the delete.
@@ -587,8 +587,8 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
     ts = pd.Timestamp("2015-05-01 01:00:00", tz="UTC")
     rows: list[dict] = []
 
-    flashed = {100: 236.40, 101: 236.45, 102: 236.50}
-    for offset, (oid, price) in enumerate(flashed.items()):
+    cancelled = {100: 236.40, 101: 236.45, 102: 236.50}
+    for offset, (oid, price) in enumerate(cancelled.items()):
         rows.append(
             {
                 "id": oid,
@@ -598,7 +598,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
                 "direction": "bid",
                 "action": "created",
                 "fill": 0.0,
-                "type": "flashed-limit",
+                "type": "cancelled-limit",
             }
         )
         rows.append(
@@ -610,7 +610,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
                 "direction": "bid",
                 "action": "deleted",
                 "fill": 0.0,
-                "type": "flashed-limit",
+                "type": "cancelled-limit",
             }
         )
 
@@ -676,7 +676,7 @@ def sample_order_lifecycle_events() -> pd.DataFrame:
         df["type"],
         categories=[
             "unknown",
-            "flashed-limit",
+            "cancelled-limit",
             "resting-limit",
             "market-limit",
             "market",
@@ -982,7 +982,7 @@ def plot_events() -> pd.DataFrame:
                 categories=["created", "changed", "deleted"],
                 ordered=True,
             ),
-            "type": ["flashed-limit"] * 10 + ["resting-limit"] * 10,
+            "type": ["cancelled-limit"] * 10 + ["resting-limit"] * 10,
         }
     )
 

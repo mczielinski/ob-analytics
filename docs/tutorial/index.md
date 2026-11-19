@@ -59,7 +59,7 @@ rendered from the bundled data):
 5. **[Depth, spread & liquidity](05_depth.md)** — the depth ledger, the
    heatmap read against it, and the colour scale as a modelling choice
 6. **[Trades & flow toxicity](06_flow_toxicity.md)** — VPIN, Kyle's λ and
-   OFI as formula → meaning → citation → code, on a tape you can check
+   trade imbalance as formula → meaning → citation → code, on a tape you can check
    by hand, then real data
 7. **[The visualization system](07_visualization_system.md)** — the
    concepts × levels × backends model behind every figure, and how to

@@ -89,15 +89,13 @@ def trade_tape(result):
 # ── Liquidity ────────────────────────────────────────────────────────
 
 
-def volume_percentiles(result):
+def depth_bands(result):
     """Cumulative resting volume in basis-point bands around the mid."""
     start, end = busiest_window(result.trades)
     return plot(
-        "volume_percentiles",
+        "depth_bands",
         level="L2",
-        **prepare.volume_percentiles(
-            result.depth_summary, start_time=start, end_time=end
-        ),
+        **prepare.depth_bands(result.depth_summary, start_time=start, end_time=end),
     )
 
 
@@ -164,8 +162,8 @@ def kyle_lambda(result):
 def flow_imbalance(result):
     """Net buy-minus-sell volume per minute, with the trade tape above."""
     # The registered metric draws the last trade price of each window in the
-    # quote currency; order_flow_imbalance(result.trades) is the same table.
-    return result.plot("order_flow_imbalance", window="1min")
+    # quote currency; trade_imbalance(result.trades) is the same table.
+    return result.plot("trade_imbalance", window="1min")
 
 
 # ── Transaction cost ─────────────────────────────────────────────────
@@ -207,11 +205,11 @@ GALLERY: list[Example] = [
         trade_tape,
     ),
     Example(
-        "volume_percentiles",
-        "Volume percentiles",
+        "depth_bands",
+        "Depth bands",
         "Liquidity",
         "Cumulative resting volume in basis-point bands around the mid.",
-        volume_percentiles,
+        depth_bands,
     ),
     Example(
         "liquidity_at_touch",
@@ -257,7 +255,7 @@ GALLERY: list[Example] = [
     ),
     Example(
         "flow_imbalance",
-        "Order flow imbalance",
+        "Trade imbalance",
         "Flow toxicity",
         "Net buy-minus-sell volume per minute.",
         flow_imbalance,

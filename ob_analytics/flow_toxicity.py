@@ -7,9 +7,9 @@ quantifying price impact:
   Trading (Easley, López de Prado & O'Hara, 2012).
 * :func:`kyle_lambda` — Kyle's Lambda price-impact coefficient
   (Kyle, 1985).
-* :func:`order_flow_imbalance` — Normalised buy/sell volume imbalance
+* :func:`trade_imbalance` — Normalised buy/sell volume imbalance
   per time window.
-* :func:`ofi_by_window` — the same imbalance over several trailing windows
+* :func:`trade_imbalance_by_window` — the same imbalance over several trailing windows
   on one time grid.
 
 All functions accept a trades DataFrame from the pipeline (or any
@@ -61,13 +61,13 @@ from ob_analytics.trade_sign import (
 __all__ = [
     "KYLE_MIN_T_STAT",
     "KYLE_MIN_WINDOWS",
-    "OFI_WINDOWS",
+    "TRADE_IMBALANCE_WINDOWS",
     "VPIN_BUCKETS_PER_DAY",
     "KyleLambdaResult",
     "VpinResult",
     "kyle_lambda",
-    "ofi_by_window",
-    "order_flow_imbalance",
+    "trade_imbalance",
+    "trade_imbalance_by_window",
     "vpin",
     "vpin_bucket_volume",
 ]
@@ -565,7 +565,7 @@ def kyle_lambda(
     Works on feeds without a native aggressor side.  When the trades frame
     has no ``direction``, the side is inferred with a trade-sign classifier
     (see *sign_method*), as for :func:`vpin` and
-    :func:`order_flow_imbalance`.
+    :func:`trade_imbalance`.
 
     Parameters
     ----------
@@ -739,21 +739,21 @@ def _block_bootstrap_slope_ci(
     return float(low), float(high)
 
 
-# ── Order Flow Imbalance ─────────────────────────────────────────────
+# ── Trade Imbalance ──────────────────────────────────────────────────
 
 
-def order_flow_imbalance(
+def trade_imbalance(
     trades: pd.DataFrame,
     *,
     window: str = "1min",
     sign_method: str | None = None,
     quotes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Compute normalised order flow imbalance per time window.
+    """Compute normalised trade imbalance per time window.
 
     For each *window*:
 
-    * ``ofi = (buy_volume − sell_volume) / (buy_volume + sell_volume)``
+    * ``trade_imbalance = (buy_volume − sell_volume) / (buy_volume + sell_volume)``
 
     Values range from −1 (all sells) to +1 (all buys).  Zero indicates
     balanced flow.
@@ -763,9 +763,10 @@ def order_flow_imbalance(
     classifier (see *sign_method*).
 
     Each window is one time bar of :func:`~ob_analytics.bars.bars`, so
-    ``ofi`` is that bar's ``signed_volume / volume``.  Windows count from the
-    Unix epoch, and a window in which nothing traded is left out.  A window
-    whose trades all have zero size is kept, with ``ofi`` set to ``NaN``.
+    ``trade_imbalance`` is that bar's ``signed_volume / volume``.  Windows
+    count from the Unix epoch, and a window in which nothing traded is left
+    out.  A window whose trades all have zero size is kept, with
+    ``trade_imbalance`` set to ``NaN``.
 
     Parameters
     ----------
@@ -794,7 +795,7 @@ def order_flow_imbalance(
         Columns: ``timestamp`` (the start of the window), ``buy_volume``,
         ``sell_volume``, ``signed_volume`` (in the instrument's own units, BTC,
         shares or contracts, whether the trades hold integer lots or display
-        sizes), ``n_trades`` (the number of trades in the window), ``ofi``.
+        sizes), ``n_trades`` (the number of trades in the window), ``trade_imbalance``.
         When the trades name their taker orders (the ``taker`` column of an
         L3 feed), an ``n_takers`` column follows ``n_trades``: the number of
         distinct taker orders in the window.  One taker order that fills
@@ -808,27 +809,27 @@ def order_flow_imbalance(
         or the sizes are integer lots and the frame carries no ``lot_size``.
         Also if *trades* is empty.
     """
-    return _ofi_windows(trades, window, sign_method, quotes)[0]
+    return _trade_imbalance_windows(trades, window, sign_method, quotes)[0]
 
 
-def _ofi_windows(
+def _trade_imbalance_windows(
     trades: pd.DataFrame,
     window: str,
     sign_method: str | None,
     quotes: pd.DataFrame | None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return the :func:`order_flow_imbalance` table and the time bars it came from.
+    """Return the :func:`trade_imbalance` table and the time bars it came from.
 
     The two frames share a row order, so a caller that needs more of each
     window (its closing price, say) reads it from the bars.  The table is in
     the instrument's units; the bars keep the units of *trades*.
     """
-    validate_columns(trades, {"timestamp", "price", "volume"}, "order_flow_imbalance")
-    validate_non_empty(trades, "order_flow_imbalance")
-    step = fixed_window(window, "order_flow_imbalance: window")
-    sizes = size_scale(trades, "order_flow_imbalance")
+    validate_columns(trades, {"timestamp", "price", "volume"}, "trade_imbalance")
+    validate_non_empty(trades, "trade_imbalance")
+    step = fixed_window(window, "trade_imbalance: window")
+    sizes = size_scale(trades, "trade_imbalance")
 
-    trades = resolve_direction(trades, sign_method, quotes, "order_flow_imbalance")
+    trades = resolve_direction(trades, sign_method, quotes, "trade_imbalance")
     windows = bars(trades, "time", step)
     out = pd.DataFrame(
         {
@@ -846,25 +847,28 @@ def _ofi_windows(
         per_window = pd.Series(taker_codes(trades["taker"])).groupby(starts).nunique()
         out["n_takers"] = per_window.reindex(out["timestamp"]).to_numpy()
     # A ratio of two sizes in the bars' own units, so it needs no conversion.
-    out["ofi"] = windows["signed_volume"] / windows["volume"].replace(0, np.nan)
+    out["trade_imbalance"] = windows["signed_volume"] / windows["volume"].replace(
+        0, np.nan
+    )
     return out, windows
 
 
-#: Trailing windows :func:`ofi_by_window` measures by default, shortest first.
-OFI_WINDOWS: tuple[str, ...] = ("5s", "15s", "60s", "300s")
+#: Trailing windows :func:`trade_imbalance_by_window` measures by default,
+#: shortest first.
+TRADE_IMBALANCE_WINDOWS: tuple[str, ...] = ("5s", "15s", "60s", "300s")
 
 
-def ofi_by_window(
+def trade_imbalance_by_window(
     trades: pd.DataFrame,
     *,
-    windows: tuple[str, ...] = OFI_WINDOWS,
+    windows: tuple[str, ...] = TRADE_IMBALANCE_WINDOWS,
     grid: str = "5s",
     sign_method: str | None = None,
     quotes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Compute order flow imbalance over several trailing windows on one grid.
+    """Compute trade imbalance over several trailing windows on one grid.
 
-    :func:`order_flow_imbalance` measures one window at a time.  This measures
+    :func:`trade_imbalance` measures one window at a time.  This measures
     each of *windows* at every step of a common time *grid*, so pressure over short
     and long windows can be compared at the same instant.  Each value is a
     *trailing* window ending at the grid step, not a block of the grid, so a
@@ -878,19 +882,19 @@ def ofi_by_window(
     windows : tuple of str, optional
         Fixed durations, one per window.  Each is rounded to a whole number
         of *grid* steps, with a minimum of one.  Default
-        :data:`OFI_WINDOWS`.
+        :data:`TRADE_IMBALANCE_WINDOWS`.
     grid : str, optional
         Step of the time grid, a fixed duration.  Default ``"5s"``.  Grid
         steps count from the Unix epoch, as the windows of
-        :func:`order_flow_imbalance` do.
+        :func:`trade_imbalance` do.
     sign_method, quotes : optional
-        How to obtain the buy/sell split, as for :func:`order_flow_imbalance`.
+        How to obtain the buy/sell split, as for :func:`trade_imbalance`.
 
     Returns
     -------
     pandas.DataFrame
         One row per grid step, with ``timestamp`` and one column per window,
-        named by its offset string.  Each value is OFI in ``[-1, +1]`` (buy
+        named by its offset string.  Each value is trade imbalance in ``[-1, +1]`` (buy
         pressure positive), or ``NaN`` when nothing traded in that window.
 
     Raises
@@ -900,11 +904,11 @@ def ofi_by_window(
         fixed duration.
         Also if *trades* is empty.
     """
-    validate_columns(trades, {"timestamp", "volume"}, "ofi_by_window")
-    validate_non_empty(trades, "ofi_by_window")
-    trades = resolve_direction(trades, sign_method, quotes, "ofi_by_window")
+    validate_columns(trades, {"timestamp", "volume"}, "trade_imbalance_by_window")
+    validate_non_empty(trades, "trade_imbalance_by_window")
+    trades = resolve_direction(trades, sign_method, quotes, "trade_imbalance_by_window")
 
-    step = fixed_window(grid, "ofi_by_window: grid")
+    step = fixed_window(grid, "trade_imbalance_by_window: grid")
     timestamps = trades["timestamp"]
     # Signed volume binned onto the fine grid, then trailing-summed per window.
     floored = window_start(timestamps, step)
@@ -928,7 +932,7 @@ def ofi_by_window(
 
     out = pd.DataFrame({"timestamp": index})
     for window in windows:
-        length = fixed_window(window, "ofi_by_window: window")
+        length = fixed_window(window, "trade_imbalance_by_window: window")
         k = max(round(length / step), 1)
         b = buy.rolling(k, min_periods=1).sum()
         s = sell.rolling(k, min_periods=1).sum()

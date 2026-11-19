@@ -1,4 +1,4 @@
-"""Tests for flow_toxicity.py — VPIN, Kyle's Lambda, and OFI."""
+"""Tests for flow_toxicity.py — VPIN, Kyle's Lambda, and trade imbalance."""
 
 import warnings
 
@@ -16,8 +16,8 @@ from ob_analytics.flow_toxicity import (
     KyleLambdaResult,
     VpinResult,
     kyle_lambda,
-    ofi_by_window,
-    order_flow_imbalance,
+    trade_imbalance,
+    trade_imbalance_by_window,
     vpin,
     vpin_bucket_volume,
 )
@@ -279,7 +279,7 @@ class TestComputeKyleLambda:
 
 
 class TestKyleLambdaSigning:
-    """λ infers a missing aggressor side the way VPIN and OFI do."""
+    """λ infers a missing aggressor side the way VPIN and trade imbalance do."""
 
     def test_runs_without_a_direction_column(self):
         tape = _busy_tape(n_windows=40)
@@ -617,57 +617,57 @@ class TestBundledSampleDiagnostics:
         assert fit.diagnostics == ()
 
 
-# ── Order Flow Imbalance ─────────────────────────────────────────────
+# ── Trade Imbalance ──────────────────────────────────────────────────
 
 
-class TestOrderFlowImbalance:
+class TestTradeImbalance:
     def test_output_columns(self):
         """Returns expected columns."""
         trades = _trades(["buy", "sell"], volumes=[1.0, 1.0])
-        result = order_flow_imbalance(trades, window="1min")
+        result = trade_imbalance(trades, window="1min")
         expected = {
             "timestamp",
             "buy_volume",
             "sell_volume",
             "signed_volume",
             "n_trades",
-            "ofi",
+            "trade_imbalance",
         }
         assert set(result.columns) == expected
 
-    def test_all_buys_ofi_one(self):
-        """All buys → OFI = 1.0."""
+    def test_all_buys_trade_imbalance_one(self):
+        """All buys → trade imbalance = 1.0."""
         trades = _trades(["buy"] * 5, volumes=[1.0] * 5)
-        result = order_flow_imbalance(trades, window="1min")
-        assert all(abs(v - 1.0) < 1e-10 for v in result["ofi"])
+        result = trade_imbalance(trades, window="1min")
+        assert all(abs(v - 1.0) < 1e-10 for v in result["trade_imbalance"])
 
-    def test_all_sells_ofi_negative_one(self):
-        """All sells → OFI = −1.0."""
+    def test_all_sells_trade_imbalance_negative_one(self):
+        """All sells → trade imbalance = −1.0."""
         trades = _trades(["sell"] * 5, volumes=[1.0] * 5)
-        result = order_flow_imbalance(trades, window="1min")
-        assert all(abs(v - (-1.0)) < 1e-10 for v in result["ofi"])
+        result = trade_imbalance(trades, window="1min")
+        assert all(abs(v - (-1.0)) < 1e-10 for v in result["trade_imbalance"])
 
-    def test_balanced_ofi_zero(self):
-        """Equal buy and sell volume in the same window → OFI = 0."""
+    def test_balanced_trade_imbalance_zero(self):
+        """Equal buy and sell volume in the same window → trade imbalance = 0."""
         trades = _trades(
             ["buy", "sell"],
             volumes=[5.0, 5.0],
             base_sec_offsets=[0, 1],
         )
-        result = order_flow_imbalance(trades, window="1min")
-        assert all(abs(v) < 1e-10 for v in result["ofi"])
+        result = trade_imbalance(trades, window="1min")
+        assert all(abs(v) < 1e-10 for v in result["trade_imbalance"])
 
     def test_empty_raises(self):
         """Empty DataFrame raises ObAnalyticsError."""
         empty = pd.DataFrame(columns=["timestamp", "volume", "direction"])
         with pytest.raises(ObAnalyticsError):
-            order_flow_imbalance(empty)
+            trade_imbalance(empty)
 
     def test_missing_columns_raises(self):
         """Missing columns raises ConfigError."""
         bad = pd.DataFrame({"timestamp": [1]})
         with pytest.raises(ConfigError):
-            order_flow_imbalance(bad)
+            trade_imbalance(bad)
 
 
 class TestOneWindowAnchor:
@@ -677,23 +677,27 @@ class TestOneWindowAnchor:
     midnight starts somewhere else than one counted from the epoch.
     """
 
-    def test_ofi_matches_time_bars(self, sample_trades):
-        ofi = order_flow_imbalance(sample_trades, window="7s")
+    def test_trade_imbalance_matches_time_bars(self, sample_trades):
+        imbalance = trade_imbalance(sample_trades, window="7s")
         time_bars = bars(sample_trades, "time", "7s")
-        assert len(ofi) == len(time_bars) == 94
+        assert len(imbalance) == len(time_bars) == 94
         starts = time_bars["timestamp_start"].dt.floor("7s")
-        assert (ofi["timestamp"].to_numpy() == starts.to_numpy()).all()
+        assert (imbalance["timestamp"].to_numpy() == starts.to_numpy()).all()
         np.testing.assert_allclose(
-            ofi["ofi"], time_bars["signed_volume"] / time_bars["volume"]
+            imbalance["trade_imbalance"],
+            time_bars["signed_volume"] / time_bars["volume"],
         )
-        # The bars keep the run's integer lots; OFI reports the instrument's units.
+        # The bars keep the run's integer lots; trade imbalance reports the
+        # instrument's units.
         lot = sample_trades.attrs["lot_size"]
         np.testing.assert_allclose(
-            ofi["signed_volume"], time_bars["signed_volume"] * lot
+            imbalance["signed_volume"], time_bars["signed_volume"] * lot
         )
 
     def test_one_step_horizon_matches_trades_through_each_grid_end(self, sample_trades):
-        by_horizon = ofi_by_window(sample_trades, windows=("7s",), grid="7s")
+        by_horizon = trade_imbalance_by_window(
+            sample_trades, windows=("7s",), grid="7s"
+        )
         ends = sample_trades["timestamp"].dt.ceil("7s")
         volume = sample_trades["volume"]
         signed = volume.where(sample_trades["direction"] == "buy", -volume)
@@ -706,8 +710,8 @@ class TestOneWindowAnchor:
     def test_kyle_windows_match_time_bars(self, sample_trades):
         reg = kyle_lambda(sample_trades, window="7s", n_boot=0).table
         time_bars = bars(sample_trades, "time", "7s")
-        ofi = order_flow_imbalance(sample_trades, window="7s")
-        assert (reg["timestamp"].to_numpy() == ofi["timestamp"].to_numpy()).all()
+        imbalance = trade_imbalance(sample_trades, window="7s")
+        assert (reg["timestamp"].to_numpy() == imbalance["timestamp"].to_numpy()).all()
         # λ's data is in the quote currency and the instrument's units.
         tick = sample_trades.attrs["tick_size"]
         lot = sample_trades.attrs["lot_size"]
@@ -726,20 +730,27 @@ class TestOneWindowAnchor:
         assert offset > pd.Timedelta(0)
         trades = _trades(["buy", "sell"], base_sec_offsets=[0, 1])
         trades["timestamp"] = [start, start + pd.Timedelta("1s")]
-        ofi = order_flow_imbalance(trades, window="7s")
-        assert ofi["timestamp"].iloc[0] == start - offset
+        imbalance = trade_imbalance(trades, window="7s")
+        assert imbalance["timestamp"].iloc[0] == start - offset
 
     @pytest.mark.parametrize(
         "call",
         [
-            lambda t: order_flow_imbalance(t, window="1ME"),
+            lambda t: trade_imbalance(t, window="1ME"),
             lambda t: kyle_lambda(t, window="1ME", n_boot=0),
-            lambda t: ofi_by_window(t, grid="1ME"),
-            lambda t: ofi_by_window(t, windows=("1ME",)),
+            lambda t: trade_imbalance_by_window(t, grid="1ME"),
+            lambda t: trade_imbalance_by_window(t, windows=("1ME",)),
             lambda t: amihud(t, window="1ME"),
             lambda t: roll_spread(t, window="1ME"),
         ],
-        ids=["ofi", "kyle", "horizon_grid", "horizon", "amihud", "roll_spread"],
+        ids=[
+            "trade_imbalance",
+            "kyle",
+            "horizon_grid",
+            "horizon",
+            "amihud",
+            "roll_spread",
+        ],
     )
     def test_calendar_window_is_a_config_error(self, call):
         # A month has no fixed length; the error names the function called.
@@ -760,10 +771,10 @@ class TestOneWindowAnchor:
 
     def test_zero_size_window_is_kept_as_nan(self):
         trades = _trades(["buy", "sell"], volumes=[0.0, 2.0], base_sec_offsets=[0, 90])
-        ofi = order_flow_imbalance(trades, window="1min")
-        assert len(ofi) == 2
-        assert np.isnan(ofi["ofi"].iloc[0])
-        assert ofi["ofi"].iloc[1] == -1.0
+        imbalance = trade_imbalance(trades, window="1min")
+        assert len(imbalance) == 2
+        assert np.isnan(imbalance["trade_imbalance"].iloc[0])
+        assert imbalance["trade_imbalance"].iloc[1] == -1.0
 
 
 # ── Visualization ────────────────────────────────────────────────────
@@ -815,29 +826,27 @@ class TestFlowToxicityPlots:
         assert "no complete buckets" in title
         assert not ax.patches and not ax.lines
 
-    def test_plot_ofi_returns_figure(self):
-        """plot_order_flow_imbalance returns a Figure."""
+    def test_plot_trade_imbalance_returns_figure(self):
+        """plot_trade_imbalance returns a Figure."""
         trades = _trades(
             ["buy", "sell"] * 5,
             volumes=[1.0] * 10,
         )
-        ofi_df = order_flow_imbalance(trades, window="1min")
-        fig = plot("order_flow_imbalance", **prepare.order_flow_imbalance(ofi_df))
-        assert drawn(fig)["rectangle"] == len(ofi_df)  # a bar for each window
+        imbalance_df = trade_imbalance(trades, window="1min")
+        fig = plot("trade_imbalance", **prepare.trade_imbalance(imbalance_df))
+        assert drawn(fig)["rectangle"] == len(imbalance_df)  # a bar for each window
 
-    def test_plot_ofi_with_price_overlay(self):
-        """plot_order_flow_imbalance with trades overlay returns a Figure."""
+    def test_plot_trade_imbalance_with_price_overlay(self):
+        """plot_trade_imbalance with trades overlay returns a Figure."""
         trades = _trades(
             ["buy", "sell"] * 5,
             volumes=[1.0] * 10,
             prices=[100.0 + i for i in range(10)],
         )
-        ofi_df = order_flow_imbalance(trades, window="1min")
-        fig = plot(
-            "order_flow_imbalance", **prepare.order_flow_imbalance(ofi_df, trades)
-        )
+        imbalance_df = trade_imbalance(trades, window="1min")
+        fig = plot("trade_imbalance", **prepare.trade_imbalance(imbalance_df, trades))
         marks = drawn(fig)
-        assert marks["rectangle"] == len(ofi_df)
+        assert marks["rectangle"] == len(imbalance_df)
         # The overlay adds the trade price, one point for each trade, to the
         # zero line the plot without it draws.
         assert marks["line"] == 2 + len(trades)

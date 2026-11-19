@@ -21,8 +21,8 @@ import pytest
 from ob_analytics import metrics
 from ob_analytics.flow_toxicity import (
     kyle_lambda,
-    ofi_by_window,
-    order_flow_imbalance,
+    trade_imbalance,
+    trade_imbalance_by_window,
     vpin,
 )
 from ob_analytics.protocols import Level
@@ -35,7 +35,13 @@ from ob_analytics.visualization.gallery import (
 )
 from tests._drawn import drawn
 
-BUILT_IN = ("kyle_lambda", "l1_ticker", "ofi_by_window", "order_flow_imbalance", "vpin")
+BUILT_IN = (
+    "kyle_lambda",
+    "l1_ticker",
+    "trade_imbalance_by_window",
+    "trade_imbalance",
+    "vpin",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -74,7 +80,7 @@ def test_built_in_metrics_apply_to_an_l2_run(result) -> None:
 # or a window, below the cards' floor, so the floor is lowered to draw.
 PLOT_SETTINGS = {
     "vpin": {"bucket_volume": 0.5, "n_buckets": 2, "min_trades": 1},
-    "order_flow_imbalance": {"min_trades": 1},
+    "trade_imbalance": {"min_trades": 1},
 }
 
 
@@ -148,11 +154,11 @@ def test_kyle_metric_keeps_the_fit_in_attrs(result) -> None:
     assert frame.attrs["diagnostics"] == kyle.diagnostics
 
 
-def test_ofi_metric_adds_the_window_close_price(result) -> None:
-    frame = result.metric("order_flow_imbalance", window="10s")
-    ofi = order_flow_imbalance(result.trades, window="10s")
+def test_trade_imbalance_metric_adds_the_window_close_price(result) -> None:
+    frame = result.metric("trade_imbalance", window="10s")
+    imbalance = trade_imbalance(result.trades, window="10s")
 
-    pd.testing.assert_frame_equal(frame[list(ofi.columns)], ofi)
+    pd.testing.assert_frame_equal(frame[list(imbalance.columns)], imbalance)
     closes = result.trades.groupby(pd.Grouper(key="timestamp", freq="10s"))[
         "price"
     ].last()
@@ -161,15 +167,15 @@ def test_ofi_metric_adds_the_window_close_price(result) -> None:
     np.testing.assert_allclose(frame["last_price"], expected)
 
 
-def test_ofi_metric_draws_the_close_as_its_price_line(result) -> None:
+def test_trade_imbalance_metric_draws_the_close_as_its_price_line(result) -> None:
     payload = _metric_payload(
-        metrics.get_metric("order_flow_imbalance"), result, window="10s"
+        metrics.get_metric("trade_imbalance"), result, window="10s"
     )
     assert list(payload["trades"].columns) == ["timestamp", "price"]
 
 
 # ---------------------------------------------------------------------------
-# ofi_by_window
+# trade_imbalance_by_window
 # ---------------------------------------------------------------------------
 
 
@@ -185,10 +191,10 @@ def _trades(rows) -> pd.DataFrame:
     )
 
 
-def test_ofi_by_window_sums_a_trailing_window_per_horizon() -> None:
+def test_trade_imbalance_by_window_sums_a_trailing_window_per_horizon() -> None:
     trades = _trades([(0, 3.0, "buy"), (5, 1.0, "sell"), (10, 1.0, "sell")])
 
-    grid = ofi_by_window(trades, windows=("5s", "15s"), grid="5s")
+    grid = trade_imbalance_by_window(trades, windows=("5s", "15s"), grid="5s")
 
     assert list(grid.columns) == ["timestamp", "5s", "15s"]
     assert grid["timestamp"].dt.tz is not None
@@ -197,9 +203,9 @@ def test_ofi_by_window_sums_a_trailing_window_per_horizon() -> None:
     assert grid["15s"].tolist() == pytest.approx([1.0, 2 / 4, 1 / 5])
 
 
-def test_ofi_by_window_only_includes_trades_up_to_the_grid_time() -> None:
+def test_trade_imbalance_by_window_only_includes_trades_up_to_the_grid_time() -> None:
     trades = _trades([(4, 3.0, "buy"), (5, 1.0, "sell"), (6, 2.0, "sell")])
-    grid = ofi_by_window(trades, windows=("5s", "10s"), grid="5s")
+    grid = trade_imbalance_by_window(trades, windows=("5s", "10s"), grid="5s")
 
     assert grid["timestamp"].dt.second.tolist() == [0, 5, 10]
     assert grid.loc[0, ["5s", "10s"]].isna().all()
@@ -207,12 +213,14 @@ def test_ofi_by_window_only_includes_trades_up_to_the_grid_time() -> None:
     assert grid["10s"].iloc[1:].tolist() == [0.5, 0.0]
 
 
-def test_ofi_by_window_face_draws_the_metric_grid(result) -> None:
-    grid = result.metric("ofi_by_window")
-    payload = prepare.ofi_by_window(result.trades)
+def test_trade_imbalance_by_window_face_draws_the_metric_grid(result) -> None:
+    grid = result.metric("trade_imbalance_by_window")
+    payload = prepare.trade_imbalance_by_window(result.trades)
 
     assert payload["windows"] == list(grid.columns[1:])
-    np.testing.assert_allclose(payload["ofi"], grid.iloc[:, 1:].to_numpy().T)
+    np.testing.assert_allclose(
+        payload["trade_imbalance"], grid.iloc[:, 1:].to_numpy().T
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +305,12 @@ def test_l1_lines_read_a_naive_window_in_the_data_time_zone() -> None:
     assert lines["best_bid_price"].tolist() == [100]
 
 
-def test_ofi_close_is_the_last_trade_in_time(result) -> None:
+def test_trade_imbalance_close_is_the_last_trade_in_time(result) -> None:
     import dataclasses
 
     shuffled = dataclasses.replace(result, trades=result.trades.iloc[::-1])
-    a = result.metric("order_flow_imbalance", window="10s")
-    b = metrics.OrderFlowImbalanceMetric().compute(shuffled, window="10s")
+    a = result.metric("trade_imbalance", window="10s")
+    b = metrics.TradeImbalanceMetric().compute(shuffled, window="10s")
     assert b["last_price"].tolist() == a["last_price"].tolist()
 
 
@@ -358,8 +366,8 @@ def test_result_plots_the_l1_card_at_an_instant(result) -> None:
     assert "BTC/USD" in {t.get_text() for t in fig.axes[0].texts}
 
 
-def test_ofi_by_window_infers_a_missing_side() -> None:
+def test_trade_imbalance_by_window_infers_a_missing_side() -> None:
     trades = _trades([(0, 1.0, "buy"), (5, 1.0, "sell")]).drop(columns="direction")
     trades["price"] = [100, 101]
     # The tick rule reads the uptick as a buy.
-    assert ofi_by_window(trades, windows=("5s",))["5s"].iloc[1] == 1.0
+    assert trade_imbalance_by_window(trades, windows=("5s",))["5s"].iloc[1] == 1.0

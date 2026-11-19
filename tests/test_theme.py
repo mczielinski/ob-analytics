@@ -169,14 +169,14 @@ class TestPaletteAcrossBackends:
 
 
 @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
-def test_ofi_bars_use_buy_and_sell(backend: str) -> None:
+def test_trade_imbalance_bars_use_buy_and_sell(backend: str) -> None:
     _skip_missing(backend)
     ts = pd.date_range("2015-01-01", periods=4, freq="min")
-    data = prepare.order_flow_imbalance(
-        pd.DataFrame({"timestamp": ts, "ofi": [0.3, -0.5, 0.7, -0.4]})
+    data = prepare.trade_imbalance(
+        pd.DataFrame({"timestamp": ts, "trade_imbalance": [0.3, -0.5, 0.7, -0.4]})
     )
     fig = plot(
-        "order_flow_imbalance", backend=backend, theme=PlotTheme(palette=CUSTOM), **data
+        "trade_imbalance", backend=backend, theme=PlotTheme(palette=CUSTOM), **data
     )
     found = _colours(backend, fig)
     assert CUSTOM.buy in found
@@ -184,8 +184,8 @@ def test_ofi_bars_use_buy_and_sell(backend: str) -> None:
 
 
 @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
-def test_ofi_by_window_uses_buy_and_sell(backend: str) -> None:
-    # Net buy / net sell bands share the OFI bar chart's aggressor colours.
+def test_trade_imbalance_by_window_uses_buy_and_sell(backend: str) -> None:
+    # Net buy / net sell bands share the trade imbalance bar chart's aggressor colours.
     _skip_missing(backend)
     ts = pd.Timestamp("2015-05-01 01:00:00")
     rng = np.random.default_rng(2)
@@ -202,7 +202,10 @@ def test_ofi_by_window_uses_buy_and_sell(backend: str) -> None:
     )
     theme = PlotTheme(palette=CUSTOM)
     fig = plot(
-        "ofi_by_window", backend=backend, theme=theme, **prepare.ofi_by_window(trades)
+        "trade_imbalance_by_window",
+        backend=backend,
+        theme=theme,
+        **prepare.trade_imbalance_by_window(trades),
     )
     if backend == "plotly":
         # Plotly fills are rgba() strings built from the palette's hex.

@@ -50,8 +50,8 @@ EXPECTED_CLASSES = {
     "Iris": "market",
     "Sam": "market",
     "Hana": "market-limit",
-    "Dana": "flashed-limit",
-    "Eve": "flashed-limit",
+    "Dana": "cancelled-limit",
+    "Eve": "cancelled-limit",
 }
 
 
@@ -160,7 +160,7 @@ class TestClassification:
 
     def test_all_four_teaching_classes_present(self, classified: pd.DataFrame) -> None:
         present = set(classified["type"].astype(str))
-        assert {"resting-limit", "market", "market-limit", "flashed-limit"} <= present
+        assert {"resting-limit", "market", "market-limit", "cancelled-limit"} <= present
 
 
 class TestContracts:

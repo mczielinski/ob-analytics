@@ -360,6 +360,32 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
     private name there. The top level now also exports `iceberg_slices`, `list_writers`,
     `register_writer` and `load_writer_plugins`, beside the other
     registries.
+- **Three names now say what the papers mean** (#506). The package keeps no
+  aliases for the old names.
+  - The traded-volume imbalance is *trade imbalance*. "Order flow
+    imbalance" in the literature is built from changes of the best bid and
+    ask queues, so the name stays free for that measure.
+    `order_flow_imbalance` -> `trade_imbalance`, and its column `ofi` ->
+    `trade_imbalance`. `ofi_by_window` -> `trade_imbalance_by_window`, and
+    `OFI_WINDOWS` -> `TRADE_IMBALANCE_WINDOWS`. The metrics, plot concepts
+    and `prepare` functions of the same names change too, as do
+    `OrderFlowImbalanceMetric` -> `TradeImbalanceMetric`,
+    `OfiByWindowMetric` -> `TradeImbalanceByWindowMetric` and
+    `ofi_by_window_card` -> `trade_imbalance_by_window_card`. The horizon
+    graph's payload key `ofi` -> `trade_imbalance`, and the bar chart's
+    `ofi_df` -> `imbalance_df`. Titles that said "Order Flow Imbalance" now
+    say "Trade Imbalance". From 0.1, the plot concept `ofi_horizon` goes
+    straight to `trade_imbalance_by_window`; the `ofi_by_window` names above
+    never shipped in a release.
+  - The plot concept `volume_percentiles` -> `depth_bands`, and
+    `prepare.volume_percentiles` -> `prepare.depth_bands`. It draws depth by
+    distance band and holds no percentile. It now has the name of
+    `depth.depth_bands`, which computes its table. Its title "Volume
+    Percentiles" -> "Depth Bands".
+  - The order type `flashed-limit` -> `cancelled-limit`, the name of its
+    lifecycle outcome `cancelled`. It means created and deleted with no
+    fill, at any age. A `type` column saved by 0.1 holds the old value:
+    replace it, or run the pipeline again.
 - **Measures with side results return one shape, and take their settings by
   keyword** (#510). A measure returns a table when the table says
   everything. When it has more to report, it returns a frozen dataclass that
