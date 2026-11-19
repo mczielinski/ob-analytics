@@ -32,7 +32,7 @@ Usage with a Source descriptor::
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -98,7 +98,11 @@ from ob_analytics.trade_sign import (
 )
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from matplotlib.axes import Axes
+
+    from ob_analytics.book import BookSnapshot
 
 __all__ = [
     "Pipeline",
@@ -116,6 +120,21 @@ _GRID_FIELDS = (
     frozenset(instrument_fields(tick_size=1.0)),
     frozenset(instrument_fields(lot_size=1.0)),
 )
+
+
+#: The per-order tables ``save_data`` can save beside a result's four tables,
+#: each with the key :meth:`PipelineResult.lifecycles` and
+#: :meth:`PipelineResult.queue` keep it under by default, so ``load_result``
+#: hands a saved table back to the accessor.
+def _queue_key(levels: str) -> Hashable:
+    """The key :meth:`PipelineResult.queue` keeps its table under."""
+    return ("queue", levels)
+
+
+_SAVABLE_TABLES: dict[str, Hashable] = {
+    "lifecycles": "lifecycles",
+    "queue": _queue_key("touch"),
+}
 
 
 @dataclass(frozen=True)
@@ -146,6 +165,17 @@ class PipelineResult:
         with what a live capture recorded in their place (see
         :func:`~ob_analytics.capture_record.run_declarations`).
         :meth:`audit` holds the run to them.  The defaults declare nothing.
+
+    Notes
+    -----
+    The tables built from the run after it ends are kept on the result:
+    :meth:`lifecycles`, :meth:`queue`, :meth:`book`, :meth:`bars` and
+    :meth:`features` build their table on the first call, and a later call
+    with the same settings returns the same table.  The display-unit tables
+    and the gallery's view of the run, which :meth:`plot` and the gallery
+    build, are kept the same way.  So the kept tables are shared: copy one
+    before you change it.  A result made with :func:`dataclasses.replace`
+    starts with nothing kept.
     """
 
     events: pd.DataFrame
@@ -155,6 +185,26 @@ class PipelineResult:
     config: PipelineConfig
     level: Level = Level.L3
     declarations: FeedDeclarations = field(default_factory=FeedDeclarations)
+    # What the accessors built, keyed by what built it.  Not a field of the
+    # run: it is left out of the constructor, of equality and of the repr.
+    _kept: dict[Hashable, Any] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    def _keep(self, key: Hashable, build: Callable[[], Any]) -> Any:
+        """Return what *build* returns, built once per *key* and kept.
+
+        A key that cannot be hashed (a setting such as a list) is built each
+        time and not kept.
+        """
+        try:
+            return self._kept[key]
+        except KeyError:
+            pass
+        except TypeError:
+            return build()
+        value = self._kept[key] = build()
+        return value
 
     def tables(self) -> dict[str, pd.DataFrame]:
         """Return the run's four core tables keyed by name.
@@ -338,6 +388,191 @@ class PipelineResult:
         return {
             metric.name: metric.compute(self) for metric in applicable_metrics(self)
         }
+
+    def lifecycles(self) -> pd.DataFrame:
+        """Return one row per order, from placement to outcome.
+
+        The table :func:`~ob_analytics.book.order_lifecycles` builds from
+        :attr:`events`.  It is built on the first call and kept.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per order id, with the columns
+            :func:`~ob_analytics.book.order_lifecycles` describes.
+
+        Raises
+        ------
+        ConfigError
+            On a run with no per-order events (an
+            :attr:`~ob_analytics.protocols.Level.L2` run).
+        """
+        from ob_analytics.book import order_lifecycles
+
+        return self._keep(
+            _SAVABLE_TABLES["lifecycles"], lambda: order_lifecycles(self.events)
+        )
+
+    def queue(self, *, levels: str = "touch") -> pd.DataFrame:
+        """Return each visible limit order's place in its price level's queue.
+
+        The table :func:`~ob_analytics.queue.queue_positions` builds from
+        :attr:`events`.  It is built on the first call for each *levels* and
+        kept.
+
+        Parameters
+        ----------
+        levels : {"touch", "all"}
+            ``"touch"`` (the default) keeps the rows where the order rests at
+            the best bid or ask.  ``"all"`` keeps every visible level.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per order event, with the columns
+            :func:`~ob_analytics.queue.queue_positions` describes.
+
+        Raises
+        ------
+        ConfigError
+            On a run with no per-order events, or for an unknown *levels*.
+        """
+        from ob_analytics.queue import queue_positions
+
+        return self._keep(
+            _queue_key(levels), lambda: queue_positions(self.events, levels=levels)
+        )
+
+    def book(
+        self,
+        at: datetime | pd.Timestamp | None = None,
+        *,
+        max_levels: int | None = None,
+        bps_range: int = 0,
+        uncross: bool = False,
+    ) -> BookSnapshot:
+        """Return the order book at *at*, rebuilt from :attr:`events`.
+
+        The snapshot :func:`~ob_analytics.book.order_book` returns for the
+        same arguments.  One snapshot is kept for each set of arguments, so a
+        second call for the same instant costs nothing.  A call for a new
+        instant rebuilds the book.
+
+        Parameters
+        ----------
+        at : datetime.datetime or pandas.Timestamp, optional
+            The instant to show.  ``None`` (the default) shows the book after
+            the last event.
+        max_levels, bps_range, uncross
+            As :func:`~ob_analytics.book.order_book` takes them.
+
+        Returns
+        -------
+        BookSnapshot
+
+        Raises
+        ------
+        ConfigError
+            On a run with no per-order events, or events without the order
+            ``type`` column.
+        """
+        from ob_analytics.book import order_book
+
+        return self._keep(
+            ("book", at, max_levels, bps_range, uncross),
+            lambda: order_book(
+                self.events,
+                at=at,
+                max_levels=max_levels,
+                bps_range=bps_range,
+                uncross=uncross,
+            ),
+        )
+
+    def bars(
+        self,
+        rule: str = "time",
+        threshold: Any = None,
+        *,
+        target_bars: int = 50,
+        sign_method: str | None = None,
+    ) -> pd.DataFrame:
+        """Return :attr:`trades` resampled into bars.
+
+        The table :func:`~ob_analytics.bars.bars` builds from :attr:`trades`,
+        with :attr:`depth_summary` as the quotes the Lee-Ready classifier
+        reads.  It is built on the first call for each set of arguments and
+        kept.
+
+        Parameters
+        ----------
+        rule, threshold, target_bars, sign_method
+            As :func:`~ob_analytics.bars.bars` takes them.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per bar, with the columns
+            :data:`~ob_analytics.bars.BAR_COLUMNS`.
+        """
+        from ob_analytics.bars import bars
+
+        return self._keep(
+            ("bars", rule, threshold, target_bars, sign_method),
+            lambda: bars(
+                self.trades,
+                rule,
+                threshold,
+                target_bars=target_bars,
+                sign_method=sign_method,
+                quotes=self.depth_summary,
+            ),
+        )
+
+    def features(
+        self,
+        rule: str = "time",
+        threshold: Any = None,
+        *,
+        target_bars: int = 50,
+        include: Sequence[str] | None = None,
+        sign_method: str | None = None,
+    ) -> pd.DataFrame:
+        """Return the feature table of this run: one row per bar.
+
+        The table :func:`~ob_analytics.features.features` builds from
+        :attr:`trades`, with :attr:`depth_summary` as the book.  It is built
+        on the first call for each set of arguments and kept.
+
+        Parameters
+        ----------
+        rule, threshold, target_bars, include, sign_method
+            As :func:`~ob_analytics.features.features` takes them.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per bar, with the columns
+            :func:`~ob_analytics.features.features` describes.
+        """
+        from ob_analytics.features import features
+
+        # A bare string stays a string, so features() refuses it as before.
+        names = (
+            include if include is None or isinstance(include, str) else tuple(include)
+        )
+        return self._keep(
+            ("features", rule, threshold, target_bars, names, sign_method),
+            lambda: features(
+                self.trades,
+                self.depth_summary,
+                rule,
+                threshold,
+                target_bars=target_bars,
+                include=include,
+                sign_method=sign_method,
+            ),
+        )
 
     def plot(
         self,

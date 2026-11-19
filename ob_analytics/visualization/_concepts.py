@@ -36,10 +36,11 @@ from typing import Any
 
 import pandas as pd
 
-from ob_analytics.book import order_book
+from ob_analytics.book import order_book, order_lifecycles
 from ob_analytics.depth import price_level_snapshots
 from ob_analytics.exceptions import ConfigError
 from ob_analytics.protocols import Level
+from ob_analytics.queue import queue_positions
 from ob_analytics.visualization import _data
 from ob_analytics.visualization._renderers import (
     RENDERERS,
@@ -131,6 +132,16 @@ class Scene:
         if not self.classified:
             return None
         return order_book(self.events, at=self.zoom_end)
+
+    @cached_property
+    def lifecycles(self) -> pd.DataFrame:
+        """One row per order (:func:`~ob_analytics.book.order_lifecycles`)."""
+        return order_lifecycles(self.events)
+
+    @cached_property
+    def queue(self) -> pd.DataFrame:
+        """The touch queue (:func:`~ob_analytics.queue.queue_positions`)."""
+        return queue_positions(self.events, levels="touch")
 
     @property
     def snapshot_label(self) -> str:
@@ -285,6 +296,21 @@ def _bound(prepare: Callable[..., dict], **kwargs: Any) -> Binding:
     return Binding(prepare, kwargs)
 
 
+def _with_scene_tables(
+    prepare: Callable[..., dict], s: Scene, *tables: str
+) -> Callable[..., dict]:
+    """*prepare*, handed the scene's per-order *tables* when the card is drawn.
+
+    The tables are read from *s* only then, so a model that never draws the
+    card does not build them, and every card of one scene shares one copy.
+    """
+
+    def call(**kwargs: Any) -> dict:
+        return prepare(**{**{name: getattr(s, name) for name in tables}, **kwargs})
+
+    return call
+
+
 # Each binder is called only for a scene that has what its face needs (see
 # Needs.unmet), so none checks the run itself.
 
@@ -324,7 +350,7 @@ def _order_activity_l2(s: Scene) -> Binding:
 
 def _order_activity_l3(s: Scene) -> Binding:
     return _bound(
-        _data.prepare_order_activity_l3_data,
+        _with_scene_tables(_data.prepare_order_activity_l3_data, s, "lifecycles"),
         events=s.events,
         **s.price_band,
         **s.overlay,
@@ -333,7 +359,7 @@ def _order_activity_l3(s: Scene) -> Binding:
 
 def _cancellations_l3(s: Scene) -> Binding:
     return _bound(
-        _data.prepare_cancellations_l3_data,
+        _with_scene_tables(_data.prepare_cancellations_l3_data, s, "lifecycles"),
         events=s.events,
     )
 
@@ -377,7 +403,7 @@ def _book_replay(level: Level) -> Binder:
 
 def _order_outcome(s: Scene) -> Binding:
     return _bound(
-        _data.prepare_order_outcome_data,
+        _with_scene_tables(_data.prepare_order_outcome_data, s, "lifecycles"),
         events=s.events,
     )
 
@@ -386,7 +412,7 @@ def _queue_position(s: Scene) -> Binding:
     # The zoom window: a whole session of touch orders smears into a band at
     # the front, while a few minutes show single orders climbing the queue.
     return _bound(
-        _data.prepare_queue_position_data,
+        _with_scene_tables(_data.prepare_queue_position_data, s, "queue", "lifecycles"),
         events=s.events,
         start_time=s.zoom_start,
         end_time=s.zoom_end,

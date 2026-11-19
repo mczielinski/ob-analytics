@@ -1,5 +1,6 @@
 """Tests for the Pipeline orchestrator."""
 
+from dataclasses import fields
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -269,9 +270,11 @@ def test_pipeline_result_is_slim(tmp_path: Path):
     Analytic outputs (VPIN/OFI/Kyle's λ) and the old metadata/extras/metrics
     bags are gone — compute them post-pipeline from ``result.trades``.
     ``level`` records which order-book level the run was produced at (L2 vs L3),
-    and ``declarations`` what the run's data is declared to show.
+    and ``declarations`` what the run's data is declared to show.  The tables
+    the accessors keep are not a field of the run: the constructor does not
+    take them.
     """
-    assert set(PipelineResult.__dataclass_fields__) == {
+    assert {f.name for f in fields(PipelineResult) if f.init} == {
         "events",
         "trades",
         "depth",

@@ -14,7 +14,7 @@ order; an L2 run skips the two marked *(L3)*.
 | **Price-level depth** | `price_level_volume`: track the volume at each price level. At L2 the loader reads this table directly. LOBSTER can use the official orderbook file for ground-truth depth |
 | **Depth metrics** | `depth_metrics`: best bid/ask, spread, and liquidity in configurable BPS bins; trades the venue left unlabelled are signed here |
 | **Aggressiveness** *(L3)* | `order_aggressiveness`: how far each new limit order sits from the best price on its own side when it arrives, in BPS |
-| **Analytics** *(after the run)* | Registered metrics (VPIN, Kyle's lambda, order-flow imbalance, transaction costs, …), bars, the feature table, hidden liquidity, queue positions *(L3)*, and the data-quality audit, all computed from the run's tables |
+| **Analytics** *(after the run)* | Registered metrics (VPIN, Kyle's lambda, order-flow imbalance, transaction costs, …), bars, the feature table, hidden liquidity, order lifecycles and queue positions *(L3)*, and the data-quality audit, all computed from the run's tables. The result keeps the lifecycles, queue, book snapshots, bars and feature table it builds (`result.lifecycles()`, `result.queue()`, …) |
 | **Visualize / export** | Depth heatmaps, event maps, trade charts, flow-toxicity plots, HTML galleries. Matplotlib (default) or Plotly backend; Bokeh draws four plots: trade_tape, depth_heatmap, book_snapshot and depth_chart. Parquet, the source formats, hftbacktest and Nautilus Trader output |
 
 ---

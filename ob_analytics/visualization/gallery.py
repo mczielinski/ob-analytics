@@ -396,6 +396,16 @@ def display_result(result: PipelineResult) -> PipelineResult:
     )
 
 
+def _display(result: PipelineResult) -> PipelineResult:
+    """Return *result* in display units, converted once and kept on *result*.
+
+    The gallery, :func:`plot_result` and :meth:`PipelineResult.plot` read the
+    display tables through here, so a second plot of one result does not
+    convert its tables again.
+    """
+    return result._keep("display", lambda: display_result(result))
+
+
 def _hidden_liquidity_overlay(
     raw_result: PipelineResult,
     zoom_start: pd.Timestamp,
@@ -488,12 +498,26 @@ def build_gallery_model(result: PipelineResult) -> GalleryModel:
     Returns
     -------
     GalleryModel
+
+    Notes
+    -----
+    What every face is drawn from (the run in display units, its busiest
+    window and price band, the per-order tables) is built on the first call
+    and kept on *result*, so a later call, :func:`plot_result` and
+    :meth:`~ob_analytics.pipeline.PipelineResult.plot` reuse it.  Each call
+    returns a new model, so adding cards to one does not change the next.
     """
-    # The overlay detectors need integer-tick prices (exact equality), and the
-    # metrics report in the instrument's own units, so both read the result
-    # before it is converted to display units.
-    raw_result = result
-    result = display_result(result)
+    # The metrics report in the instrument's own units, so they read the
+    # result before it is converted to display units.
+    scene = result._keep("gallery_scene", lambda: _scene(result))
+    return GalleryModel(concepts=_concept_cards(scene), analytics=_metric_cards(result))
+
+
+def _scene(raw_result: PipelineResult) -> _concepts.Scene:
+    """Build what every gallery face of *raw_result* is drawn from."""
+    # The overlay detectors need integer-tick prices (exact equality), so
+    # they read the result before it is converted to display units.
+    result = _display(raw_result)
 
     events = result.events
     trades = result.trades
@@ -518,7 +542,7 @@ def build_gallery_model(result: PipelineResult) -> GalleryModel:
         summary = depth_summary
     summary_start, summary_end = _window_over(summary, zoom_start, zoom_end)
 
-    scene = _concepts.Scene(
+    return _concepts.Scene(
         events=events,
         trades=trades,
         depth=depth,
@@ -530,9 +554,6 @@ def build_gallery_model(result: PipelineResult) -> GalleryModel:
         summary_end=summary_end,
         focus=focus,
         overlay=_hidden_liquidity_overlay(raw_result, zoom_start, zoom_end, focus),
-    )
-    return GalleryModel(
-        concepts=_concept_cards(scene), analytics=_metric_cards(raw_result)
     )
 
 
