@@ -358,16 +358,18 @@ class TestPlotOrderActivityL3:
     def test_rounded_price_ticks_caps_count(self) -> None:
         # The Gantt placed one tick per price_by step, stacking labels into an
         # unreadable smear on a wide book; round-number ticks must be thinned.
-        from ob_analytics.visualization._matplotlib import _rounded_price_ticks
+        from ob_analytics.visualization._data import rounded_price_ticks
 
-        ticks = _rounded_price_ticks(78250.0, 78510.0, 5.0, max_ticks=12)
+        ticks = rounded_price_ticks(78250.0, 78510.0, 5.0, max_ticks=12)
         assert 0 < len(ticks) <= 12
         for t in ticks:
             assert abs(t / 5.0 - round(t / 5.0)) < 1e-9  # still multiples of price_by
 
     def test_gantt_thins_y_ticks_on_wide_book(self) -> None:
-        # 260-wide window at a 5-unit grid would place 52 ticks; the renderer
-        # must thin them to a legible count.
+        # 260-wide window at a 5-unit grid would place 52 ticks; the payload's
+        # ticks are thinned to a legible count, and the renderer draws them.
+        from ob_analytics.visualization._data import rounded_price_ticks
+
         empty = pd.DataFrame(
             {"price": [], "start_ts": [], "end_ts": [], "linewidth": []}
         )
@@ -385,8 +387,10 @@ class TestPlotOrderActivityL3:
             "resting": empty,
             "y_range": (78250.0, 78510.0),
             "price_by": 5.0,
+            "price_ticks": rounded_price_ticks(78250.0, 78510.0, 5.0),
             "shown_of": None,
             "show_markers": False,
+            "iceberg_chains": [],
         }
         fig = plot("order_activity", Level.L3, **data)
         ax = fig.axes[0]
@@ -427,7 +431,7 @@ class TestPlotCancellationsL3:
     def test_returns_figure(self, sample_cancellation_events):
         data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plot("cancellations", Level.L3, **data)
-        assert drawn(fig)["polycollection"] > 0
+        assert drawn(fig)["quadmesh"] > 0
 
     def test_accepts_ax(self, sample_cancellation_events):
         fig_orig, ax_orig = plt.subplots()
@@ -438,11 +442,11 @@ class TestPlotCancellationsL3:
     def test_its_one_level_is_resolved(self, sample_cancellation_events):
         # An L3-only plot since #492: the level may be left out.
         data = prepare.cancellations(sample_cancellation_events)
-        assert drawn(plot("cancellations", **data))["polycollection"] > 0
+        assert drawn(plot("cancellations", **data))["quadmesh"] > 0
 
-    def test_hexbin_is_rasterized(self, sample_cancellation_events):
-        # The density hexbin is a vector PolyCollection; rasterize it so a dense
-        # book does not bloat the saved figure.
+    def test_density_is_rasterized(self, sample_cancellation_events):
+        # The density grid is a vector mesh; rasterize it so a dense book does
+        # not bloat the saved figure.
         data = prepare.cancellations(sample_cancellation_events, level="L3")
         fig = plot("cancellations", Level.L3, **data)
         ax = fig.axes[0]
@@ -913,7 +917,7 @@ class TestPlotEventsHistogram:
             **prepare.events_histogram(plot_events, val="price", bw=0.25),
         )
         # One histogram for the bids and one for the asks.
-        assert drawn(fig) == {"fillbetweenpolycollection": 2}
+        assert drawn(fig) == {"steppatch": 2}
 
     def test_accepts_ax(self, plot_events):
         fig_orig, ax_orig = plt.subplots()
@@ -948,7 +952,7 @@ class TestVolumeNorm:
 
         from ob_analytics.visualization._matplotlib import _volume_norm
 
-        norm = _volume_norm(pd.Series([1.0, 10.0, 100.0]), col_bias=1.0)
+        norm = _volume_norm((1.0, 100.0), col_bias=1.0)
         # Exactly linear, not a PowerNorm/LogNorm subclass.
         assert type(norm) is mcolors.Normalize
 
@@ -957,26 +961,28 @@ class TestVolumeNorm:
 
         from ob_analytics.visualization._matplotlib import _volume_norm
 
-        norm = _volume_norm(pd.Series([1.0, 10.0, 100.0]), col_bias=0.1)
+        norm = _volume_norm((1.0, 100.0), col_bias=0.1)
         assert isinstance(norm, mcolors.PowerNorm)
         assert norm.gamma == 0.1
 
     def test_fractional_bias_brightens_low_volume(self):
         from ob_analytics.visualization._matplotlib import _volume_norm
 
-        vol = pd.Series([1.0, 10.0, 100.0])
-        linear = _volume_norm(vol, col_bias=1.0)
-        biased = _volume_norm(vol, col_bias=0.1)
+        linear = _volume_norm((1.0, 100.0), col_bias=1.0)
+        biased = _volume_norm((1.0, 100.0), col_bias=0.1)
         # A low-volume level lands higher on the ramp under the bias.
         assert biased(10.0) > linear(10.0)
 
     def test_nonpositive_bias_is_log(self):
         import matplotlib.colors as mcolors
 
+        from ob_analytics.visualization._data import color_limits
         from ob_analytics.visualization._matplotlib import _volume_norm
 
         # Zeros (which become NaN upstream) must not poison the log vmin.
-        norm = _volume_norm(pd.Series([0.0, 1.0, 100.0]), col_bias=0.0)
+        norm = _volume_norm(
+            color_limits(np.array([0.0, 1.0, 100.0]), 0.0), col_bias=0.0
+        )
         assert isinstance(norm, mcolors.LogNorm)
         assert norm.vmin == 1.0
 

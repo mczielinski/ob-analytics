@@ -44,11 +44,19 @@ def _frame(spec: list[tuple[int, list[int]]]) -> pd.DataFrame:
 
 @pytest.fixture
 def data() -> dict:
-    return {
+    fates = {
         # Order 9 has one row: no line, but it still gets an end marker.
         "filled": _frame([(1, [5, 4, 3, 1]), (2, [3, 2]), (9, [7])]),
         "cancelled": _frame([(3, [6, 6, 5]), (5, [8, 7, 7, 4, 2])]),
         "resting": _frame([(6, [4, 3])]),
+    }
+    return {
+        **fates,
+        # Each order's last row, as prepare_queue_position_data gives it.
+        "ends": {
+            f: fates[f].groupby("id", sort=False).tail(1)
+            for f in ("filled", "cancelled")
+        },
         "max_rank": 9,
         "show_markers": True,
     }

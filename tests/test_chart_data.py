@@ -196,10 +196,26 @@ class TestPrepareCancellationsL3:
         self, sample_cancellation_events: pd.DataFrame
     ) -> None:
         data = prepare.cancellations(sample_cancellation_events, level="L3")
-        assert set(data) == {"bids", "asks"}
+        assert {"bids", "asks"} <= set(data)
         for side in (data["bids"], data["asks"]):
             assert isinstance(side, pd.DataFrame)
             assert {"age_s", "distance_from_touch"} <= set(side.columns)
+
+    def test_density_counts_every_order_on_one_grid(
+        self, sample_cancellation_events: pd.DataFrame
+    ) -> None:
+        # Both backends draw these counts, so neither bins the orders itself.
+        data = prepare.cancellations(sample_cancellation_events, level="L3", bins=12)
+        assert data["age_edges"].shape == data["distance_edges"].shape == (13,)
+        for side, counts in (
+            (data["bids"], "bid_counts"),
+            (data["asks"], "ask_counts"),
+        ):
+            assert data[counts].shape == (12, 12)
+            assert np.nansum(data[counts]) == len(side)
+        assert np.nansum(data["counts"]) == len(data["bids"]) + len(data["asks"])
+        # The colours span the combined grid too, which one axes draws.
+        assert data["count_range"] == (1.0, np.nanmax(data["counts"]))
 
     def test_age_and_distance_floored_for_log(
         self, sample_cancellation_events: pd.DataFrame
@@ -266,10 +282,12 @@ class TestPrepareOrderActivityL3:
             "cancelled",
             "resting",
             "price_by",
+            "price_ticks",
             "y_range",
             "shown_of",
             "show_markers",
             "iceberg_lines",
+            "iceberg_chains",
             "iceberg_refills",
             "hidden_trades",
         }
