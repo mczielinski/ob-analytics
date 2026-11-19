@@ -38,7 +38,7 @@ from ob_analytics._utils import (
 )
 from ob_analytics.depth import get_spread
 from ob_analytics.exceptions import ConfigError, UnknownNameError
-from ob_analytics.flow_toxicity import OFI_WINDOWS
+from ob_analytics.flow_toxicity import TRADE_IMBALANCE_WINDOWS
 from ob_analytics.pipeline import PipelineResult
 from ob_analytics.protocols import Level
 from ob_analytics.visualization import (
@@ -67,8 +67,8 @@ __all__ = [
     "display_result",
     "generate_gallery",
     "kyle_lambda_card",
-    "ofi_by_window_card",
     "plot_result",
+    "trade_imbalance_by_window_card",
     "trading_halts_card",
 ]
 
@@ -718,20 +718,20 @@ def bars_card(bars: pd.DataFrame, *, label: str = "") -> PlotSpec:
     )
 
 
-def ofi_by_window_card(
+def trade_imbalance_by_window_card(
     trades: pd.DataFrame,
     *,
-    windows: tuple[str, ...] = OFI_WINDOWS,
+    windows: tuple[str, ...] = TRADE_IMBALANCE_WINDOWS,
     grid: str = "5s",
     start_time: pd.Timestamp | None = None,
     end_time: pd.Timestamp | None = None,
 ) -> PlotSpec:
-    """Build an OFI-by-window card for :attr:`GalleryModel.analytics` (one band per window)."""
+    """Build a trade-imbalance-by-window card for :attr:`GalleryModel.analytics` (one band per window)."""
     return PlotSpec(
-        "ofi_by_window",
-        "Order Flow Imbalance by Window",
-        "ofi_by_window",
-        _viz_data.prepare_ofi_by_window_data,
+        "trade_imbalance_by_window",
+        "Trade Imbalance by Window",
+        "trade_imbalance_by_window",
+        _viz_data.prepare_trade_imbalance_by_window_data,
         {
             "trades": trades,
             "windows": windows,

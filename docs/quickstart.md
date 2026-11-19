@@ -140,7 +140,7 @@ See [Run from the command line](howto/cli.md) for all subcommands.
 | Process LOBSTER message + orderbook files | [Process LOBSTER files](howto/lobster.md) |
 | Plug in your own loader, trade reader, or format | [Plug in custom components](howto/custom-components.md) |
 | Theme plots, save artefacts, or use Plotly | [Save, load, and export](howto/output.md) |
-| Compute VPIN / Kyle's λ / OFI | [Compute flow toxicity](howto/flow-toxicity.md) |
+| Compute VPIN / Kyle's λ / trade imbalance | [Compute flow toxicity](howto/flow-toxicity.md) |
 | Process Databento market-by-order files | [Process Databento files](howto/databento.md) |
 | Process price-level (L2) feeds | [Process L2 feeds](howto/l2-depth.md) |
 | Capture live order-book data from an exchange | [Capture live data](howto/live-capture.md) |

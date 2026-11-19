@@ -575,8 +575,8 @@ class TestPerOrderFunctionsRefuseL2:
 _TRADE_METRICS = (
     "vpin",
     "kyle_lambda",
-    "order_flow_imbalance",
-    "ofi_by_window",
+    "trade_imbalance",
+    "trade_imbalance_by_window",
     "transaction_costs",
     "amihud",
     "roll_spread",
@@ -720,7 +720,7 @@ class TestL2Gallery:
         )
         assert out.exists()
 
-    @pytest.mark.parametrize("concept", ["price_view", "volume_percentiles"])
+    @pytest.mark.parametrize("concept", ["price_view", "depth_bands"])
     def test_summary_faces_render_on_sparse_capture(self, sparse_l2_result, concept):
         """A short, sparse capture still draws the depth-summary faces.
 
@@ -733,14 +733,14 @@ class TestL2Gallery:
         assert drawn(fig)
 
     @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
-    @pytest.mark.parametrize("concept", ["price_view", "volume_percentiles"])
+    @pytest.mark.parametrize("concept", ["price_view", "depth_bands"])
     def test_summary_faces_draw_no_data_on_an_empty_window(
         self, sparse_l2_result, concept, backend
     ):
         """A window the caller passes that holds no rows gives a "no data" figure.
 
         Before the fix, price_view raised a TypeError (matplotlib) and
-        volume_percentiles raised a KeyError (both backends).
+        depth_bands raised a KeyError (both backends).
         """
         import matplotlib.pyplot as plt
 

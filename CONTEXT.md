@@ -301,9 +301,15 @@ maker's fill. Found by `hidden_trades`.
 
 **Order type**:
 The class the classifier gives an order from how it behaved over its whole
-life. Named `type`, with values `unknown`, `pre-existing`, `flashed-limit`,
+life. Named `type`, with values `unknown`, `pre-existing`, `cancelled-limit`,
 `resting-limit`, `market-limit` and `market`.
 _Avoid_: category, class, label
+
+**Cancelled-limit**:
+The order type of an order created and then deleted with its full size, with
+no fill, at any age. Its lifecycle outcome is `cancelled`. Some are short-lived
+(papers call those fleeting orders), but the type does not look at the clock.
+_Avoid_: fleeting
 
 **Maker** / **taker**:
 The maker is the resting side of a trade; the taker is the side that crossed
@@ -318,11 +324,14 @@ a bare "direction" would be read as the book side; the identifier stays
 `direction`.
 _Avoid_: `aggressor` as an identifier, sign, initiator
 
-**Order flow imbalance (OFI)**:
-Signed volume divided by total traded volume, per time window, from `-1` to
-`+1`. Computed by `order_flow_imbalance`, or by `ofi_by_window` for several
-trailing windows at once. `order_flow_imbalance` names its column `ofi`;
-`ofi_by_window` writes one column per window.
+**Trade imbalance**:
+Signed traded volume divided by total traded volume, per time window, from
+`-1` to `+1`. Computed by `trade_imbalance`, or by `trade_imbalance_by_window`
+for several trailing windows at once. `trade_imbalance` names its column
+`trade_imbalance`; `trade_imbalance_by_window` writes one column per window.
+It is not the measure of Cont, Kukanov and Stoikov (2014), which is built from
+changes of the best bid and ask queues. The package keeps that measure's name
+free for it.
 
 **VPIN**:
 Volume-synchronized probability of informed trading: trades put in buckets of
@@ -356,7 +365,12 @@ _Avoid_: metrics, stats, aggregates
 One range of distances from the mid-price in the depth summary, on each side
 of the book. Its width in basis points is `depth_bps` and their
 count is `depth_bins`.
-_Avoid_: bucket, band, ring
+_Avoid_: bucket, ring; say band only for a depth bin as `depth_bands` draws it
+
+**Depth bands**:
+The size resting in each depth bin over time, one column per bin and side.
+Computed by `depth_bands`, and drawn by the `depth_bands` plot concept, which
+stacks one band per depth bin.
 
 **Micro-price**:
 The mid-price weighted by the size resting on the opposite side. Named
@@ -654,7 +668,7 @@ feature; the worked example of writing one.
 
 **Trailing window**:
 The stretch a value looks back over, ending at its own row. A feature counts
-it in bars, named `n_bars`, the row's own included; `ofi_by_window` measures it
-as a span of time, one per entry of `windows`. A `window` argument is always a
-span of time, given as a pandas offset string.
+it in bars, named `n_bars`, the row's own included; `trade_imbalance_by_window`
+measures it as a span of time, one per entry of `windows`. A `window` argument
+is always a span of time, given as a pandas offset string.
 _Avoid_: lookback, span, period, horizon (a horizon looks forward)

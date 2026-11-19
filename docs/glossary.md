@@ -284,9 +284,9 @@ cancelled without ever crossing the spread. The value is `resting-limit`.
 : A limit order that crosses on arrival but, after partial fills, comes
 to rest as a passive order at a price inside the book.
 
-**Flashed-limit**
-: A limit order that is created and cancelled within a very short time
-without ever filling. Common in HFT quote-stuffing patterns.
+**Cancelled-limit**
+: A limit order that is created and then deleted with its full size, at
+any age. It never fills. Its lifecycle outcome is `cancelled`.
 
 ## Trades
 
@@ -371,11 +371,11 @@ of signed volume). Returned as a [`KyleLambdaResult`](api/flow_toxicity.md#ob_an
 with the regression DataFrame, a bootstrap confidence interval, and a
 `significant` flag that is `False` on too few windows or `|t| < 2`.
 
-**Order flow imbalance (OFI)**
+**Trade imbalance**
 : Signed volume divided by total traded volume, per time window, from `-1`
 (all sells) to `+1` (all buys). A short-horizon proxy for directional
-pressure. Computed by `order_flow_imbalance`, or by `ofi_by_window` for
-several trailing windows at once.
+pressure. Computed by `trade_imbalance`, or by
+`trade_imbalance_by_window` for several trailing windows at once.
 
 ## Bars
 

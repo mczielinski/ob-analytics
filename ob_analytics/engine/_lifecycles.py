@@ -67,8 +67,8 @@ class OrderLifecycles:
         Termination time in int64 nanoseconds, or :data:`~ob_analytics.engine.
         NAT_NS` while the order is still resting.
     outcome : numpy.ndarray
-        :class:`Outcome` codes.  Flashed orders are the cancelled subset the classifier labelled
-        ``flashed-limit``.
+        :class:`Outcome` codes.  When the classifier set the order types,
+        every ``cancelled-limit`` order has the cancelled outcome.
     """
 
     order_id: np.ndarray

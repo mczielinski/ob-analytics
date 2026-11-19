@@ -630,7 +630,7 @@ ORDER_TYPE_DTYPE = pd.CategoricalDtype(
     [
         "unknown",
         "pre-existing",
-        "flashed-limit",
+        "cancelled-limit",
         "resting-limit",
         "market-limit",
         "market",

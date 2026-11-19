@@ -26,7 +26,7 @@ name; a concept drawn at both L2 and L3 needs ``level=``.  The same rule holds
 for :func:`plot_result` and ``PipelineResult.plot``.
 
 Plot types: depth heatmaps, event maps, volume maps, order book snapshots,
-trade price charts, volume percentiles, and event histograms.
+trade price charts, depth bands, and event histograms.
 """
 
 from __future__ import annotations

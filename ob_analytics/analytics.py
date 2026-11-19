@@ -115,7 +115,7 @@ def order_aggressiveness(
 
     orders = events[
         (events["action"] != "changed")
-        & events["type"].isin(["flashed-limit", "resting-limit"])
+        & events["type"].isin(["cancelled-limit", "resting-limit"])
     ]
     missing = ~orders["timestamp"].isin(depth_summary["timestamp"])
     if missing.any():
@@ -293,7 +293,7 @@ def maker_resting_times(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFr
 def cancelled_orders(events: pd.DataFrame) -> pd.DataFrame:
     """Return each cancelled order's age and distance from the touch.
 
-    A cancelled order here is a *flashed-limit* order (see
+    A cancelled order here is a *cancelled-limit* order (see
     :func:`set_order_types`): placed, then deleted with the size it came with,
     with no fill or change in between.  Its placement and its end are read
     from :func:`~ob_analytics.book.order_lifecycles`.
@@ -327,7 +327,8 @@ def cancelled_orders(events: pd.DataFrame) -> pd.DataFrame:
     validate_columns(events, {"type", "aggressiveness_bps"}, "cancelled_orders")
     lifecycles = order_lifecycles(events)
     cancelled = lifecycles[
-        (lifecycles["type"] == "flashed-limit") & (lifecycles["outcome"] == "cancelled")
+        (lifecycles["type"] == "cancelled-limit")
+        & (lifecycles["outcome"] == "cancelled")
     ]
     return pd.DataFrame(
         {
@@ -354,7 +355,7 @@ def set_order_types(events: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     """Determine limit order types.
 
     Classifies each order as one of: *market*, *resting-limit*,
-    *flashed-limit*, or *market-limit*, based on how the order interacts
+    *cancelled-limit*, or *market-limit*, based on how the order interacts
     with the book over its lifetime.
 
     *market* and *market-limit* mark takers, so they need the trades' taker
@@ -468,7 +469,7 @@ def _order_types(facts: _OrderFacts, trades: pd.DataFrame) -> pd.Series:
     created_ids, deleted_ids = created["id"], deleted["id"]
     changed = facts.changed
 
-    # Created and deleted with no change in between: a flashed order, when it
+    # Created and deleted with no change in between: a cancelled-limit order, when it
     # left with the size it came with.
     created_deleted_ids = created_ids[
         created_ids.isin(deleted_ids) & ~created_ids.isin(changed)
@@ -476,7 +477,7 @@ def _order_types(facts: _OrderFacts, trades: pd.DataFrame) -> pd.Series:
     cd_created = created[created_ids.isin(created_deleted_ids)]
     cd_deleted = deleted[deleted_ids.isin(created_deleted_ids)]
     cd_merged = cd_created.merge(cd_deleted, on="id", suffixes=("_created", "_deleted"))
-    flashed_ids = cd_merged.loc[
+    cancelled_ids = cd_merged.loc[
         cd_merged["volume_created"] == cd_merged["volume_deleted"], "id"
     ]
     forever_ids = created_ids[
@@ -502,10 +503,10 @@ def _order_types(facts: _OrderFacts, trades: pd.DataFrame) -> pd.Series:
             is_taker & ~is_maker,
             is_taker & is_maker,
             ids.isin(forever_ids) | (is_maker & ~is_taker),
-            ids.isin(flashed_ids),
+            ids.isin(cancelled_ids),
             ~ids.isin(created_ids),
         ],
-        ["market", "market-limit", "resting-limit", "flashed-limit", "pre-existing"],
+        ["market", "market-limit", "resting-limit", "cancelled-limit", "pre-existing"],
         default="unknown",
     )
     unidentified = int((kind == "unknown").sum())

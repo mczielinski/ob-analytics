@@ -2038,9 +2038,9 @@ def plotly_trade_tape_per_order(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
     return fig
 
 
-@renders("volume_percentiles", L2)
-def plotly_volume_percentiles(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
-    """Render volume-percentile stacked area chart."""
+@renders("depth_bands", L2)
+def plotly_depth_bands(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+    """Render depth-band stacked area chart."""
     pal = theme.palette
     go = _import_plotly()
     asks_cumsum = data["asks_cumsum"]
@@ -2054,8 +2054,8 @@ def plotly_volume_percentiles(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -
     side_line = data["side_line"]
 
     if asks_cumsum.empty:
-        return _base_figure(go, theme, title="Volume Percentiles (no data)")
-    fig = _base_figure(go, theme, title="Volume Percentiles")
+        return _base_figure(go, theme, title="Depth Bands (no data)")
+    fig = _base_figure(go, theme, title="Depth Bands")
 
     # Convert matplotlib RGBA tuples to plotly rgb strings
     def _to_rgb(c: Any) -> str:
@@ -2259,25 +2259,26 @@ def plotly_vpin(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
     return fig
 
 
-@renders("order_flow_imbalance", None)
-def plotly_order_flow_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
-    """Render order flow imbalance bar chart."""
+@renders("trade_imbalance", None)
+def plotly_trade_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
+    """Render trade imbalance bar chart."""
     pal = theme.palette
     go = _import_plotly()
-    ofi_df = data["ofi_df"]
+    imbalance_df = data["imbalance_df"]
     trades = data["trades"]
     too_few = data.get("too_few")
-    if too_few or ofi_df.empty:
-        fig = _base_figure(go, theme, title="Order Flow Imbalance")
+    if too_few or imbalance_df.empty:
+        fig = _base_figure(go, theme, title="Trade Imbalance")
         _hide_axes(fig)
         _add_notice(fig, too_few or "No windows to draw.", pal)
         return fig
-    # Buy pressure (OFI >= 0) in the buy colour, sell pressure in the sell colour.
-    colors = np.where(ofi_df["ofi"].to_numpy() >= 0, pal.buy, pal.sell)
-
-    fig = _base_figure(
-        go, theme, title="Order Flow Imbalance", notice=data.get("notice")
+    # Buy pressure (trade imbalance >= 0) in the buy colour, sell pressure in
+    # the sell colour.
+    colors = np.where(
+        imbalance_df["trade_imbalance"].to_numpy() >= 0, pal.buy, pal.sell
     )
+
+    fig = _base_figure(go, theme, title="Trade Imbalance", notice=data.get("notice"))
 
     # Plotly sizes bars from the closest pair; with thin windows left out
     # that pair can be far apart, so use 80% of the gap between all windows.
@@ -2285,18 +2286,18 @@ def plotly_order_flow_imbalance(data: dict, *, theme: PlotTheme = DEFAULT_THEME)
     width_ms = gap.total_seconds() * 800.0 if gap is not None else None
     fig.add_trace(
         go.Bar(
-            x=ofi_df["timestamp"],
-            y=ofi_df["ofi"],
+            x=imbalance_df["timestamp"],
+            y=imbalance_df["trade_imbalance"],
             width=width_ms,
             marker_color=colors,
             opacity=0.7,
-            name="OFI",
-            hovertemplate="Time: %{x}<br>OFI: %{y:.3f}<extra></extra>",
+            name="Trade imbalance",
+            hovertemplate="Time: %{x}<br>Trade imbalance: %{y:.3f}<extra></extra>",
         )
     )
 
     fig.add_hline(y=0, line_color=pal.rule, line_width=0.5, opacity=0.6)
-    fig.update_yaxes(range=[-1.05, 1.05], title_text="OFI")
+    fig.update_yaxes(range=[-1.05, 1.05], title_text="Trade imbalance")
     fig.update_xaxes(title_text="Time")
 
     if trades is not None and "price" in trades.columns:
@@ -2426,9 +2427,11 @@ def plotly_transaction_costs(data: dict, *, theme: PlotTheme = DEFAULT_THEME) ->
     return fig
 
 
-@renders("ofi_by_window", None)
-def plotly_ofi_by_window(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any:
-    """Order-flow-imbalance horizon graph across several trailing windows.
+@renders("trade_imbalance_by_window", None)
+def plotly_trade_imbalance_by_window(
+    data: dict, *, theme: PlotTheme = DEFAULT_THEME
+) -> Any:
+    """Trade-imbalance horizon graph across several trailing windows.
 
     One stacked subplot per window (sharing the time axis); each fills from
     its baseline in the theme's buy (net buy) / sell (net sell) colours,
@@ -2438,10 +2441,10 @@ def plotly_ofi_by_window(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
     """
     pal = theme.palette
     go = _import_plotly()
-    ofi = data["ofi"]
+    imbalance = data["trade_imbalance"]
     windows = data["windows"]
-    if getattr(ofi, "size", 0) == 0:
-        return _base_figure(go, theme, title="Order flow imbalance — horizon graph")
+    if getattr(imbalance, "size", 0) == 0:
+        return _base_figure(go, theme, title="Trade imbalance — horizon graph")
 
     from plotly.subplots import make_subplots
 
@@ -2477,7 +2480,7 @@ def plotly_ofi_by_window(data: dict, *, theme: PlotTheme = DEFAULT_THEME) -> Any
         fig.update_yaxes(range=[0, 1], showticklabels=False, row=i + 1, col=1)
     fig.update_layout(
         template=_template(go, theme),
-        title="Order flow imbalance — horizon graph (buy / sell)",
+        title="Trade imbalance — horizon graph (buy / sell)",
     )
     fig.update_xaxes(title_text="Time", row=n, col=1)
     return fig

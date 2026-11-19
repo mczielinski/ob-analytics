@@ -130,8 +130,14 @@ _GOLDEN_CONFIG = SynthConfig(seed=143, duration=60.0)
 # ``taker`` are ``object`` (the venue's order id), instead of ``int64``. Only
 # ``trades`` moves, and only in those dtypes: cast back to ``int64`` the frame
 # hashes to the old digest, and none of the ids is null.
+# 2026-11-18 (#506, the order type ``flashed-limit`` is renamed
+# ``cancelled-limit``): only the label moves. ``events`` (398 of 970 rows) and
+# ``order_lifecycles`` (199 of 428 orders) carry the new name in ``type``.
+# With ``cancelled-limit`` mapped back to ``flashed-limit``, both frames hash
+# to the old digests. ``trades``, ``depth``, ``depth_summary``, ``order_book`` and
+# ``queue_positions`` are unchanged.
 EXPECTED: dict[str, str] = {
-    "events": "099cab88568a9f81c98a6b8cbd610d4c74a276e2bd25e5437b5fa5755ff6fd76",
+    "events": "29c4817c0f02ad65595001442ed9c378aa749cef1b39ca8d8551516e8690766c",
     "trades": "44f0832f89776cb2311145ae2d9bfeb075604f0bcb3128b3b37d685d3e9f7b13",
     "depth": "ff29441ebf00d611150d9abafee49a562c8dd98352002b291ab55118a6e0d2f6",
     "depth_summary": "e801e79063fcea5384ba76ca51c48d0c5304b0fa512a036ca5a86c64e6253be5",
@@ -148,7 +154,7 @@ EXPECTED: dict[str, str] = {
     # had no fingerprint before, which is how a first pass at the engine lost
     # the compensated summation behind ``filled_vol`` without any gate noticing.
     "order_lifecycles": (
-        "d36dcab5334cc1d97632fd8f4f64ec8062bfd1e185a820d0d5db7fc89e6d0f79"
+        "4174444d00c90f79204005e8bed381ccc25c569b119ee4ae7a7ebe6329f2c5be"
     ),
 }
 

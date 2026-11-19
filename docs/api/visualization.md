@@ -48,11 +48,11 @@ needs `level="L2"` or `level="L3"`, with the arguments of that face.
 
 Concepts with both L2 and L3 faces: `trade_tape`, `order_activity`,
 `book_snapshot`, `depth_chart`, `book_replay`, `liquidity_at_touch`. L2-only:
-`depth_heatmap`, `volume_percentiles`, `events_histogram`, `price_view`,
+`depth_heatmap`, `depth_bands`, `events_histogram`, `price_view`,
 `trade_size`. L3-only: `cancellations`, `order_outcome`, `queue_position`,
 `hidden_executions`. Level-less: `time_series`, which only `plot` draws, and
-the analytics `vpin`, `order_flow_imbalance`,
-`kyle_lambda`, `ofi_by_window`, `l1_ticker`, `book_signals`,
+the analytics `vpin`, `trade_imbalance`,
+`kyle_lambda`, `trade_imbalance_by_window`, `l1_ticker`, `book_signals`,
 `transaction_costs`, `amihud`, `roll_spread`, `bars`, `trading_halts`. All
 but the last two are also registered [metrics](metrics.md), so
 `result.plot("vpin")` computes and draws them.
@@ -145,6 +145,8 @@ tables into the keyword arguments `plot()` takes for that concept.
 
 ::: ob_analytics.visualization.prepare.cancellations
 
+::: ob_analytics.visualization.prepare.depth_bands
+
 ::: ob_analytics.visualization.prepare.depth_chart
 
 ::: ob_analytics.visualization.prepare.depth_heatmap
@@ -161,11 +163,7 @@ tables into the keyword arguments `plot()` takes for that concept.
 
 ::: ob_analytics.visualization.prepare.liquidity_at_touch
 
-::: ob_analytics.visualization.prepare.ofi_by_window
-
 ::: ob_analytics.visualization.prepare.order_activity
-
-::: ob_analytics.visualization.prepare.order_flow_imbalance
 
 ::: ob_analytics.visualization.prepare.order_outcome
 
@@ -177,6 +175,10 @@ tables into the keyword arguments `plot()` takes for that concept.
 
 ::: ob_analytics.visualization.prepare.time_series
 
+::: ob_analytics.visualization.prepare.trade_imbalance
+
+::: ob_analytics.visualization.prepare.trade_imbalance_by_window
+
 ::: ob_analytics.visualization.prepare.trade_size
 
 ::: ob_analytics.visualization.prepare.trade_tape
@@ -184,8 +186,6 @@ tables into the keyword arguments `plot()` takes for that concept.
 ::: ob_analytics.visualization.prepare.trading_halts
 
 ::: ob_analytics.visualization.prepare.transaction_costs
-
-::: ob_analytics.visualization.prepare.volume_percentiles
 
 ::: ob_analytics.visualization.prepare.vpin
 

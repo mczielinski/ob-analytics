@@ -44,7 +44,7 @@ from ob_analytics.visualization.gallery import (
     display_result,
     generate_gallery,
     kyle_lambda_card,
-    ofi_by_window_card,
+    trade_imbalance_by_window_card,
     trading_halts_card,
 )
 from tests import _lobster_few_levels as few
@@ -836,7 +836,7 @@ class TestBuildGalleryModel:
         assert heatmap is not None and histogram is not None
         # The price histogram clips to the same mid-anchored window as the depth
         # heatmap, so it shows the near-touch distribution instead of a single
-        # 1px spike (q01-q99 of a heavy-tailed book still spans flashed orders).
+        # 1px spike (q01-q99 of a heavy-tailed book still spans cancelled orders).
         assert histogram.prep_kwargs["price_from"] == heatmap.prep_kwargs["price_from"]
         assert histogram.prep_kwargs["price_to"] == heatmap.prep_kwargs["price_to"]
 
@@ -1166,9 +1166,13 @@ def _draw(card: PlotSpec):
 
 
 class TestCardBuilders:
-    def test_ofi_by_window_card_draws_a_band_for_each_window(self, result) -> None:
-        card = ofi_by_window_card(display_result(result).trades, windows=("5s", "15s"))
-        assert card.title == "Order Flow Imbalance by Window"
+    def test_trade_imbalance_by_window_card_draws_a_band_for_each_window(
+        self, result
+    ) -> None:
+        card = trade_imbalance_by_window_card(
+            display_result(result).trades, windows=("5s", "15s")
+        )
+        assert card.title == "Trade Imbalance by Window"
         fig = _draw(card)
         assert {t.get_text().strip() for t in fig.axes[0].texts} >= {"5s", "15s"}
         assert drawn(fig)["fillbetweenpolycollection"] > 0

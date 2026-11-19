@@ -248,7 +248,7 @@ def test_no_unknown_order_types():
     assert (events["type"] != "unknown").all()
     # The default model produces exactly these three classes.
     assert set(events["type"].unique().astype(str)) <= {
-        "flashed-limit",
+        "cancelled-limit",
         "resting-limit",
         "market",
     }
@@ -256,7 +256,7 @@ def test_no_unknown_order_types():
 
 def test_passive_orders_do_not_cross():
     events = _session().events
-    passive = events[events["type"].isin(["resting-limit", "flashed-limit"])]
+    passive = events[events["type"].isin(["resting-limit", "cancelled-limit"])]
     passive_bids = passive[passive["direction"] == "bid"]
     passive_asks = passive[passive["direction"] == "ask"]
     assert passive_bids["price"].max() < passive_asks["price"].min()

@@ -1354,7 +1354,7 @@ def _resting_book_events(orders: list[tuple[int, float, int, str]]) -> pd.DataFr
         categories=[
             "unknown",
             "pre-existing",
-            "flashed-limit",
+            "cancelled-limit",
             "resting-limit",
             "market-limit",
             "market",
