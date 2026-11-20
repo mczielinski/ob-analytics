@@ -361,6 +361,7 @@ table with those dtypes.
 | Column | Arrow type | Unit | Null? | Meaning |
 |---|---|---|---|---|
 | `timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | no | Trade print time (receive clock). |
+| `exchange_timestamp` | `timestamp[ns, tz=UTC]` | ns, UTC | yes | The venue's time of the trade. Only the reader of Bitstamp-format captures adds it. |
 | `price` | `int64` | ticks | no | Execution price in ticks (× `tick_size` for the quote currency). |
 | `volume` | `int64` | lots | no | Executed size. |
 | `direction` | `dictionary<string>` | — | yes | Taker's aggressor side: `buy` or `sell`. Null on an L2 feed until Lee–Ready fills it, then set. |
@@ -370,6 +371,11 @@ table with those dtypes.
 | `taker` | `int64` / `string` | — | yes | Order id of the taker. |
 | `maker_og` | `int64` | — | yes | `original_number` of the maker order. |
 | `taker_og` | `int64` | — | yes | `original_number` of the taker order. |
+
+`exchange_timestamp` is present only on trades read from a capture's
+`trades.csv`. The stale-order check uses it when the source declares that its
+trades come on a different connection from its order events (see
+[`TradeOrder`](api/protocols.md)).
 
 See [Nullable integer columns](#nullable-integer-columns) for how the id columns
 materialize on disk.

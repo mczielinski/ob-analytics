@@ -16,6 +16,7 @@ from ob_analytics.protocols import (
     SupportsRequiredContext,
     SupportsWriter,
     TradeAttribution,
+    TradeOrder,
     declarations_of,
     required_context_of,
 )
@@ -99,6 +100,7 @@ class TestFeedDeclarations:
             trade_attribution=TradeAttribution.MAKER_ONLY,
             sequence_kind=SequenceKind.MONOTONIC,
             clocks=Clocks.RECEIVE_ONLY,
+            trade_order=TradeOrder.VENUE,
             sequence_restarts=3,
         )
         assert FeedDeclarations.from_dict(declared.to_dict()) == declared

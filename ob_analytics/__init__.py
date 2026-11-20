@@ -170,6 +170,7 @@ from ob_analytics.protocols import (
     SupportsRequiredContext,
     SupportsWriter,
     TradeAttribution,
+    TradeOrder,
     TradeReader,
     WriteTarget,
 )
@@ -287,6 +288,7 @@ __all__ = [
     "SupportsWriter",
     "ToyOrder",
     "TradeAttribution",
+    "TradeOrder",
     "TradeReader",
     "UnknownNameError",
     "VpinResult",

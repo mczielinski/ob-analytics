@@ -28,6 +28,7 @@ from ob_analytics.protocols import (
     Level,
     SequenceKind,
     TradeAttribution,
+    TradeOrder,
 )
 
 _T0 = 1_760_000_000_000
@@ -74,6 +75,7 @@ class TestReadRecord:
                     "trade_attribution": "none",
                     "sequence_kind": "monotonic",
                     "clocks": "receive_only",
+                    "trade_order": "venue",
                     "sequence_restarts": 2,
                     "tick_size": 0.001,
                     "lot_size": 1.0,
@@ -89,6 +91,7 @@ class TestReadRecord:
             trade_attribution=TradeAttribution.NONE,
             sequence_kind=SequenceKind.MONOTONIC,
             clocks=Clocks.RECEIVE_ONLY,
+            trade_order=TradeOrder.VENUE,
             sequence_restarts=2,
             tick_size=0.001,
             lot_size=1.0,
@@ -145,6 +148,7 @@ class _Declaring:
     trade_attribution = TradeAttribution.NONE
     sequence_kind = SequenceKind.MONOTONIC
     clocks = Clocks.RECEIVE_ONLY
+    trade_order = TradeOrder.VENUE
 
 
 class TestReplaySource:
@@ -195,11 +199,19 @@ class TestWriteRecord:
             trade_attribution=TradeAttribution.NONE,
             sequence_kind=SequenceKind.MONOTONIC,
             clocks=Clocks.RECEIVE_ONLY,
+            trade_order=TradeOrder.VENUE,
             tick_size=0.5,
             lot_size=0.1,
             level=Level.L2,
             replay_source="depth_csv",
         )
+
+    def test_trade_order_is_written_only_when_declared(self):
+        class Undeclared:
+            name = "example"
+
+        assert "trade_order" not in source_declarations(Undeclared())
+        assert source_declarations(_Declaring())["trade_order"] == "venue"
 
     def test_leaves_no_temporary_file(self, tmp_path):
         write_record(tmp_path, {"source": "example"})
@@ -279,6 +291,7 @@ class TestPipelineAppliesTheRecord:
             "trade_attribution": "none",
             "sequence_kind": "monotonic",
             "clocks": "receive_only",
+            "trade_order": "venue",
             "sequence_restarts": 2,
         }
         cap = _l2_capture(tmp_path / "cap", _FINE_ROWS, record)
@@ -288,6 +301,7 @@ class TestPipelineAppliesTheRecord:
             trade_attribution=TradeAttribution.NONE,
             sequence_kind=SequenceKind.MONOTONIC,
             clocks=Clocks.RECEIVE_ONLY,
+            trade_order=TradeOrder.VENUE,
             sequence_restarts=2,
         )
 

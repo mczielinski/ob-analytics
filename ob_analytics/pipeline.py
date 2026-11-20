@@ -331,6 +331,7 @@ class PipelineResult:
             sequence_restarts=declared.sequence_restarts,
             trade_attribution=declared.trade_attribution,
             clocks=declared.clocks,
+            trade_order=declared.trade_order,
             venue_book=venue_book,
         )
 

@@ -29,7 +29,9 @@ or `price_levels`; see [Data quality](../data-quality.md)) and a `Level` (`L2` v
 [Check data quality](../howto/audit.md)). A source that records the venue's
 sequence number may also declare a `SequenceKind`: whether a skipped number
 means a lost message. A source whose data has one clock declares `Clocks`, so
-the clock checks know there is nothing to compare. It carries typed `settings` and registers in the source
+the clock checks know there is nothing to compare. A source whose trades come
+on a different connection from its order events declares `TradeOrder`, so the
+stale-order check orders the two by the venue's time. It carries typed `settings` and registers in the source
 registry (see [Sources](sources.md)). It may state the tick and lot size its
 data is usually on as `grid`, which a run's config starts from.
 
@@ -55,6 +57,10 @@ many runs and many pipelines.
 ::: ob_analytics.protocols.Clocks
 
 ::: ob_analytics.protocols.clocks_of
+
+::: ob_analytics.protocols.TradeOrder
+
+::: ob_analytics.protocols.trade_order_of
 
 ::: ob_analytics.protocols.FeedDeclarations
 

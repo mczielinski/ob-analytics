@@ -89,6 +89,13 @@ stale order holds the ask touch for 27 minutes, and it causes almost all of the
 91.61%. When the run has stale orders, the crossing note says so instead of
 calling the crossing normal.
 
+The stale check puts trades and order events in order by the time the capture
+received them. That is right when both come on one connection. Some venues send
+trades on a different connection, so a trade can arrive after an order that the
+venue made after it. A source like this declares `TradeOrder.VENUE`, and the
+capture records it in `meta.json`. The check then orders trades and events by
+the venue's time (`exchange_timestamp`), and the check's message says so.
+
 ## What fails a run
 
 Every metric above is scored by a named check carrying a severity, and the exit

@@ -50,6 +50,7 @@ __all__ = [
     "SupportsRequiredContext",
     "SupportsWriter",
     "TradeAttribution",
+    "TradeOrder",
     "TradeReader",
     "WriteTarget",
     "clocks_of",
@@ -58,6 +59,7 @@ __all__ = [
     "required_context_of",
     "sequence_kind_of",
     "trade_attribution_of",
+    "trade_order_of",
 ]
 
 
@@ -240,6 +242,37 @@ class Clocks(str, Enum):
     VENUE_ONLY = "venue_only"
 
 
+class TradeOrder(str, Enum):
+    """Which clock puts a feed's trades in order with its order events.
+
+    The stale-order check (:func:`~ob_analytics.quality.detect_stale_orders`)
+    asks whether a trade came after an order rested.  It needs a clock that
+    puts the two tables in the venue's order:
+
+    * :attr:`RECEIVE` — trades and order events come in one stream, in the
+      order the venue sent them, so the receive time ``timestamp`` orders
+      them.  This is the default.  Bitstamp sends both on one connection,
+      and a LOBSTER or Databento file holds both in the venue's order.
+    * :attr:`VENUE` — trades come on a different connection from the order
+      events, so one can be late against the other.  A taker order that
+      trades and then rests its remainder can then reach the capture before
+      its own trade, and look like a resting order the trade printed
+      through.  Only the venue's time, ``exchange_timestamp``, orders the
+      two.  Kraken's level-3 book and its public trades are like this.
+
+    A source declares it so the check uses the right clock.  A live capture
+    records it in ``meta.json``.  The venue clock is used only when the run
+    carries two clocks (:attr:`Clocks.BOTH`) and both tables have
+    ``exchange_timestamp``; otherwise the check uses ``timestamp``.
+
+    Mixes in ``str`` so members compare and serialise as their value, as
+    :class:`FeedType` does.
+    """
+
+    RECEIVE = "receive"
+    VENUE = "venue"
+
+
 def trade_attribution_of(source: Any) -> TradeAttribution:
     """Return what *source* declares as its :class:`TradeAttribution`.
 
@@ -265,6 +298,14 @@ def clocks_of(source: Any) -> Clocks:
     return Clocks(getattr(source, "clocks", Clocks.BOTH))
 
 
+def trade_order_of(source: Any) -> TradeOrder:
+    """Return what *source* declares as its :class:`TradeOrder`.
+
+    A source that does not declare one is read as :attr:`TradeOrder.RECEIVE`.
+    """
+    return TradeOrder(getattr(source, "trade_order", TradeOrder.RECEIVE))
+
+
 @dataclass(frozen=True)
 class FeedDeclarations:
     """What a run's data is declared to show, which ``audit`` holds it to.
@@ -287,6 +328,8 @@ class FeedDeclarations:
         What the venue ``sequence`` promises (:class:`SequenceKind`).
     clocks : Clocks
         Which clocks the book rows carry (:class:`Clocks`).
+    trade_order : TradeOrder
+        Which clock orders trades against order events (:class:`TradeOrder`).
     sequence_restarts : int
         How many times a capture's venue sequence started again at a new
         opening book.  This is not a declaration but a count the capture
@@ -298,6 +341,7 @@ class FeedDeclarations:
     trade_attribution: TradeAttribution = TradeAttribution.BOTH
     sequence_kind: SequenceKind = SequenceKind.CONTIGUOUS
     clocks: Clocks = Clocks.BOTH
+    trade_order: TradeOrder = TradeOrder.RECEIVE
     sequence_restarts: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -307,6 +351,7 @@ class FeedDeclarations:
             "trade_attribution": self.trade_attribution.value,
             "sequence_kind": self.sequence_kind.value,
             "clocks": self.clocks.value,
+            "trade_order": self.trade_order.value,
             "sequence_restarts": self.sequence_restarts,
         }
 
@@ -331,6 +376,7 @@ class FeedDeclarations:
                 fields.get("sequence_kind", default.sequence_kind)
             ),
             clocks=Clocks(fields.get("clocks", default.clocks)),
+            trade_order=TradeOrder(fields.get("trade_order", default.trade_order)),
             sequence_restarts=int(
                 fields.get("sequence_restarts", default.sequence_restarts)
             ),
@@ -341,9 +387,9 @@ def declarations_of(source: Any) -> FeedDeclarations:
     """Return the :class:`FeedDeclarations` *source* makes.
 
     A declaration the source does not make keeps the default, as
-    :func:`trade_attribution_of`, :func:`sequence_kind_of` and
-    :func:`clocks_of` read it; a source that declares no ``feed_type`` is
-    :attr:`FeedType.UNKNOWN`.  ``None`` declares nothing.
+    :func:`trade_attribution_of`, :func:`sequence_kind_of`, :func:`clocks_of`
+    and :func:`trade_order_of` read it; a source that declares no
+    ``feed_type`` is :attr:`FeedType.UNKNOWN`.  ``None`` declares nothing.
     """
     if source is None:
         return FeedDeclarations()
@@ -352,6 +398,7 @@ def declarations_of(source: Any) -> FeedDeclarations:
         trade_attribution=trade_attribution_of(source),
         sequence_kind=sequence_kind_of(source),
         clocks=clocks_of(source),
+        trade_order=trade_order_of(source),
     )
 
 
