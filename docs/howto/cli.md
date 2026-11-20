@@ -154,7 +154,8 @@ ob-analytics capture ccxt --help
 ```
 
 For `ccxt` and `cryptofeed`, `--venue` names the venue; for `kalshi`,
-`--pair` takes the market ticker. A source from a
+`--pair` takes the market ticker; for `kraken`, `--depth` sets how many price
+levels a side Kraken sends. A source from a
 plug-in package gets its flags the same way, so it is set up from the command
 line as from Python. A field gets a flag named after it when its type is one
 the command line reads (`str`, `int`, `float`, `bool`, a `Literal`, an `Enum`

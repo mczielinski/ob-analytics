@@ -29,9 +29,11 @@ segments, rolls, reconnects and restarts work.
 
 The `bitstamp` source captures Bitstamp itself, and the `kalshi` source
 captures Kalshi from its WebSocket feed (it needs the `kalshi` extra and an API
-key). The `ccxt` and `cryptofeed` sources reach many venues through those
-libraries, and need the `ccxt` and `cryptofeed` extras. See
+key). The `kraken` source captures Kraken order by order (it needs the `live`
+extra and an API key). The `ccxt` and `cryptofeed` sources reach many venues
+through those libraries, and need the `ccxt` and `cryptofeed` extras. See
 [Capture Kalshi](../howto/kalshi.md#capture-every-change-with-an-api-key),
+[Capture Kraken order by order](../howto/kraken.md),
 [Capture CCXT venues](../howto/ccxt.md) and
 [Capture cryptofeed venues](../howto/cryptofeed.md).
 
@@ -48,6 +50,10 @@ libraries, and need the `ccxt` and `cryptofeed` extras. See
 ::: ob_analytics.live.KalshiSource
 
 ::: ob_analytics.live.KalshiSettings
+
+::: ob_analytics.live.KrakenSource
+
+::: ob_analytics.live.KrakenSettings
 
 ## Writing a live source
 
