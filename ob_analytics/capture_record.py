@@ -6,7 +6,7 @@ back, and this module owns those:
 
 * what the source that made the capture declares about its feed
   (``source``, ``feed_type``, ``trade_attribution``, ``sequence_kind``,
-  ``clocks``), which ``audit`` holds the capture to;
+  ``clocks``, ``trade_order``), which ``audit`` holds the capture to;
 * the capture's resolution (``level``) and the source that reads its files
   back (``replay_source``), which ``ob-analytics process`` and ``audit`` use
   when ``--source`` is not given;
@@ -52,10 +52,12 @@ from ob_analytics.protocols import (
     OfflineSource,
     SequenceKind,
     TradeAttribution,
+    TradeOrder,
     clocks_of,
     declarations_of,
     sequence_kind_of,
     trade_attribution_of,
+    trade_order_of,
 )
 
 __all__ = [
@@ -81,6 +83,7 @@ FEED_TYPE = "feed_type"
 TRADE_ATTRIBUTION = "trade_attribution"
 SEQUENCE_KIND = "sequence_kind"
 CLOCKS = "clocks"
+TRADE_ORDER = "trade_order"
 SEQUENCE_RESTARTS = "sequence_restarts"
 TICK_SIZE = "tick_size"
 LOT_SIZE = "lot_size"
@@ -137,6 +140,10 @@ class CaptureRecord:
         Which clocks the capture's rows carry (see
         :class:`~ob_analytics.protocols.Clocks`).  A live source learns this
         from the venue's books, so it is written when the capture closes.
+    trade_order : TradeOrder or None
+        Which clock orders the capture's trades against its order events (see
+        :class:`~ob_analytics.protocols.TradeOrder`).  ``None`` when the
+        source declares none; then use what the source declares now.
     sequence_restarts : int
         How many times the venue's sequence started again.  A source that
         finds a lost message itself starts again from a new opening book, and
@@ -160,6 +167,7 @@ class CaptureRecord:
     trade_attribution: TradeAttribution | None = None
     sequence_kind: SequenceKind | None = None
     clocks: Clocks | None = None
+    trade_order: TradeOrder | None = None
     sequence_restarts: int = 0
     tick_size: float | None = None
     lot_size: float | None = None
@@ -241,6 +249,7 @@ def read_record(path: Any) -> CaptureRecord:
         trade_attribution=_enum(fields, TRADE_ATTRIBUTION, TradeAttribution, where),
         sequence_kind=_enum(fields, SEQUENCE_KIND, SequenceKind, where),
         clocks=_enum(fields, CLOCKS, Clocks, where),
+        trade_order=_enum(fields, TRADE_ORDER, TradeOrder, where),
         sequence_restarts=_count(fields, SEQUENCE_RESTARTS),
         tick_size=_step(fields, TICK_SIZE),
         lot_size=_step(fields, LOT_SIZE),
@@ -299,6 +308,7 @@ def run_declarations(path: Any, source: Any) -> FeedDeclarations:
         trade_attribution=record.trade_attribution or declared.trade_attribution,
         sequence_kind=sequence_kind or declared.sequence_kind,
         clocks=record.clocks or declared.clocks,
+        trade_order=record.trade_order or declared.trade_order,
         sequence_restarts=record.sequence_restarts,
     )
 
@@ -517,8 +527,9 @@ def source_declarations(source: Any) -> dict[str, Any]:
     ``replay_source`` the offline source that reads the capture back
     (:func:`replay_source_of`).  ``feed_type`` and ``trade_attribution`` are
     what it declares (see :class:`~ob_analytics.protocols.FeedType` and
-    :class:`~ob_analytics.protocols.TradeAttribution`).  ``sequence_kind`` is
-    written only by a source that declares one.  ``clocks`` (see
+    :class:`~ob_analytics.protocols.TradeAttribution`).  ``sequence_kind``
+    and ``trade_order`` (see :class:`~ob_analytics.protocols.TradeOrder`) are
+    written only by a source that declares them.  ``clocks`` (see
     :class:`~ob_analytics.protocols.Clocks`) is read when the capture closes,
     since a live source learns it from the venue's books.
 
@@ -554,4 +565,11 @@ def source_declarations(source: Any) -> dict[str, Any]:
         declared[CLOCKS] = clocks_of(source).value
     except Exception as exc:  # noqa: BLE001 - never block finalize
         logger.warning("Capturer '{}' clocks unreadable: {!r}", source.name, exc)
+    if getattr(source, "trade_order", None) is not None:
+        try:
+            declared[TRADE_ORDER] = trade_order_of(source).value
+        except Exception as exc:  # noqa: BLE001 - never block finalize
+            logger.warning(
+                "Capturer '{}' trade_order unreadable: {!r}", source.name, exc
+            )
     return declared

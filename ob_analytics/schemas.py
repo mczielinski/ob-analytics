@@ -855,6 +855,10 @@ TRADES = Table(
     "trades",
     (
         Column("timestamp", UTC_NS_DTYPE),
+        # The venue's time of the trade, when the reader has it.  The
+        # stale-order check orders trades by it on a feed whose trades come on
+        # another connection from its order events.
+        Column("exchange_timestamp", UTC_NS_DTYPE, presence="optional"),
         Column("price", "int64", PRICE),
         Column("volume", "int64", SIZE),
         # The taker's side; null on an L2 feed until trade signing fills it.

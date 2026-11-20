@@ -463,6 +463,15 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **A source can say its trades come on another connection** (#555).
+  `TradeOrder.VENUE` tells the stale-order check to put trades and order
+  events in order by the venue's time (`exchange_timestamp`), not by the time
+  the capture received them. A live capture records it in `meta.json` as
+  `trade_order`. `detect_stale_orders` and `data_quality_summary` take a
+  `trade_order` argument, and the summary reports the clock it used as
+  `stale_orders_clock`. The trades table has an optional `exchange_timestamp`
+  column, which the reader of Bitstamp-format captures now fills from
+  `trades.csv`. Bitstamp, LOBSTER and Databento keep the receive time.
 - **A test draws every face in the concept table** (#504).
   `tests/test_every_face.py` draws each face on the bundled sample, with
   each backend that has it. A face must draw marks, or show the reason its

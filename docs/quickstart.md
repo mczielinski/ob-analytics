@@ -77,7 +77,7 @@ print(f"Depth summary: {result.depth_summary.shape}")
 
 ```text
 Events:        (314057, 13)
-Trades:        (284, 10)
+Trades:        (284, 11)
 Depth:         (313561, 5)
 Depth summary: (313561, 46)
 ```

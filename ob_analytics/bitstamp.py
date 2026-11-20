@@ -364,7 +364,8 @@ class BitstampTradeReader:
     Reads each row from ``<source_dir>/trades.csv`` and projects it into
     the canonical trades schema, joining against the events frame to
     resolve ``buy_order_id`` / ``sell_order_id`` into ``event_id`` and
-    ``original_number`` references.
+    ``original_number`` references.  It keeps the venue's time of each trade
+    as ``exchange_timestamp``, empty where the file has none.
 
     A trade is matched to a row of the order it names whose ``fill`` is the
     trade's size, the earliest such row first.  Bitstamp does not always
@@ -416,6 +417,13 @@ class BitstampTradeReader:
         received = checked_times(
             raw["timestamp"], capture_format.time_unit, "timestamp", where
         )
+        venue = checked_times(
+            raw["exchange_timestamp"],
+            capture_format.time_unit,
+            "exchange_timestamp",
+            where,
+            required=False,
+        )
 
         # `direction` is the taker side: "buy" => taker is the buyer.
         taker_buys = raw["direction"].astype(str) == "buy"
@@ -451,6 +459,7 @@ class BitstampTradeReader:
                 # ``.array`` keeps the tz-aware UTC dtype (``.values`` would
                 # drop the zone to a naive numpy datetime64).
                 "timestamp": received.array,
+                "exchange_timestamp": venue.array,
                 # Trade prints share the events' integer-tick price grid (#155).
                 # An execution can print between two ticks, so its price is
                 # rounded to the nearest tick, not checked (issue #500).
@@ -741,11 +750,16 @@ class BitstampWriter:
         # Go through the canonical inverse so a tz-aware UTC column
         # round-trips cleanly.
         ts = datetime_to_epoch(trades["timestamp"], _WRITE_UNIT)
+        venue = ts
+        if "exchange_timestamp" in trades.columns:
+            venue = datetime_to_epoch(
+                trades["exchange_timestamp"].fillna(trades["timestamp"]), _WRITE_UNIT
+            )
         out = pd.DataFrame(
             {
                 "trade_id": np.arange(1, len(trades) + 1, dtype=np.int64),
                 "timestamp": ts,
-                "exchange_timestamp": ts,
+                "exchange_timestamp": venue,
                 "price": ticks_to_price(
                     trades["price"],
                     self._config.tick_size,

@@ -25,7 +25,13 @@ from ob_analytics.depth import (
     price_level_volume,
 )
 from ob_analytics.exceptions import ConfigError
-from ob_analytics.protocols import Clocks, FeedType, SequenceKind, TradeAttribution
+from ob_analytics.protocols import (
+    Clocks,
+    FeedType,
+    SequenceKind,
+    TradeAttribution,
+    TradeOrder,
+)
 from ob_analytics.schemas import (
     INGEST_SEQ_COLUMN,
     MAYBE_BAD_BOOK_ATTR,
@@ -397,6 +403,66 @@ def _capture_end_ns(events: pd.DataFrame, trades: pd.DataFrame) -> int:
     return max(ends)
 
 
+def _has_venue_time(frame: pd.DataFrame) -> bool:
+    """Whether *frame* carries the venue's time on at least one row."""
+    return "exchange_timestamp" in frame.columns and bool(
+        frame["exchange_timestamp"].notna().any()
+    )
+
+
+def _on_venue_clock(frame: pd.DataFrame, keep: frozenset[str]) -> pd.DataFrame:
+    """The *keep* columns of *frame*, with ``timestamp`` set to the venue's time.
+
+    A row with no venue time (an opening book's row, say) keeps its receive
+    time.  Only the columns the stale check reads are copied, so a large
+    capture is not held twice.
+    """
+    out = frame[[c for c in frame.columns if c in keep]].copy()
+    venue = out["exchange_timestamp"]
+    out["timestamp"] = venue.where(venue.notna(), out["timestamp"])
+    return out
+
+
+def _find_stale_orders(
+    events: pd.DataFrame,
+    trades: pd.DataFrame,
+    *,
+    grace: pd.Timedelta,
+    tick_size: float,
+    depth: pd.DataFrame | None,
+    best: pd.DataFrame | None,
+    venue_clock: bool,
+) -> pd.DataFrame:
+    """The stale orders, with ``attrs["clock"]`` naming the column that ordered them.
+
+    On the venue clock both frames are re-timed with :func:`_on_venue_clock`,
+    and the touch is measured on a book rebuilt from the re-timed events, so
+    every time in the result is on one clock.  *depth* and *best* are on the
+    receive clock and are not used then.
+    """
+    if venue_clock:
+        events = _on_venue_clock(
+            events, _LEVEL_COLUMNS | {SEQUENCE_COLUMN, INGEST_SEQ_COLUMN}
+        )
+        trades = _on_venue_clock(
+            trades, frozenset({"timestamp", "exchange_timestamp", "price"})
+        )
+        depth = best = None
+    stale = _empty_stale_orders()
+    end_ns = _capture_end_ns(events, trades)
+    spans = _stale_spans(events, trades, grace, end_ns)
+    if not spans.empty:
+        if best is None:
+            if depth is None:
+                # Re-timed rows can take a level below zero for an instant;
+                # that is the re-timing, not the data, so it is not warned of.
+                depth = price_level_volume(events, warn_overdrawn=not venue_clock)
+            best = _faithful_best_series(depth)
+        stale = _stale_orders(spans, best, end_ns, tick_size)
+    stale.attrs["clock"] = "exchange_timestamp" if venue_clock else "timestamp"
+    return stale
+
+
 def _range_extreme(
     values: np.ndarray, lo: np.ndarray, hi: np.ndarray, *, highest: bool
 ) -> np.ndarray:
@@ -556,6 +622,7 @@ def detect_stale_orders(
     grace: pd.Timedelta = STALE_GRACE,
     depth: pd.DataFrame | None = None,
     tick_size: float = 1.0,
+    trade_order: TradeOrder = TradeOrder.RECEIVE,
 ) -> pd.DataFrame:
     """Find resting orders a trade printed through that the venue left in place.
 
@@ -575,6 +642,12 @@ def detect_stale_orders(
     :func:`~ob_analytics.display.display_result` converts for display
     (prices in the quote currency, sizes in the base asset; leave
     ``tick_size`` at ``1.0``).  Both give the same orders and the same times.
+
+    The test puts trades and order events in order by ``timestamp``, the
+    receive time.  That is right when both come in one stream.  When the
+    trades come on another connection and can arrive late, pass
+    ``trade_order=TradeOrder.VENUE`` to order them by ``exchange_timestamp``
+    instead (see :class:`~ob_analytics.protocols.TradeOrder`).
 
     Parameters
     ----------
@@ -599,6 +672,16 @@ def detect_stale_orders(
         the quote currency.  Leave at ``1.0`` to report them in the units of
         ``events["price"]``: ticks for the pipeline's tables, the quote
         currency for display tables.
+    trade_order : TradeOrder, optional
+        Which clock puts trades in order with the order events.
+        :attr:`~ob_analytics.protocols.TradeOrder.RECEIVE` (the default)
+        uses ``timestamp``.
+        :attr:`~ob_analytics.protocols.TradeOrder.VENUE` uses
+        ``exchange_timestamp``, and a row without one keeps its
+        ``timestamp``.  When either frame has no venue time on any row, the
+        check uses ``timestamp`` and ``attrs["clock"]`` says so.  All the times in the result are then on the venue's
+        clock, and *depth* is not used: the touch is measured on a book
+        rebuilt from *events* on that clock.
 
     Returns
     -------
@@ -619,14 +702,17 @@ def detect_stale_orders(
           was the best price on its side of the faithful book: how long it held
           the touch after the trade showed it was gone.
 
-        ``attrs`` holds ``grace``, the wait used.
+        ``attrs`` holds ``grace``, the wait used, and ``clock``, the column
+        that ordered the trades and events (``"timestamp"`` or
+        ``"exchange_timestamp"``).
 
     Raises
     ------
     ConfigError
         If a required column is missing, or *events* has no rows: an L2 run
         has no per-order events, and an empty answer would read as "no stale
-        orders".
+        orders".  On the venue clock, both frames need
+        ``exchange_timestamp``.
     """
     validate_columns(
         events,
@@ -635,15 +721,20 @@ def detect_stale_orders(
     )
     require_per_order_events(events, "detect_stale_orders")
     validate_columns(trades, {"timestamp", "price"}, "detect_stale_orders(trades)")
-    stale = _empty_stale_orders()
-    if not trades.empty:
-        end_ns = _capture_end_ns(events, trades)
-        spans = _stale_spans(events, trades, grace, end_ns)
-        if not spans.empty:
-            if depth is None:
-                depth = price_level_volume(events)
-            best = _faithful_best_series(depth)
-            stale = _stale_orders(spans, best, end_ns, tick_size)
+    venue_clock = TradeOrder(trade_order) is TradeOrder.VENUE
+    if venue_clock:
+        validate_columns(events, {"exchange_timestamp"}, "detect_stale_orders(events)")
+        validate_columns(trades, {"exchange_timestamp"}, "detect_stale_orders(trades)")
+        venue_clock = _has_venue_time(events) and _has_venue_time(trades)
+    stale = _find_stale_orders(
+        events,
+        trades,
+        grace=grace,
+        tick_size=tick_size,
+        depth=depth,
+        best=None,
+        venue_clock=venue_clock,
+    )
     stale.attrs["grace"] = grace
     return stale
 
@@ -870,7 +961,8 @@ class DataQualitySummary:
         again within :data:`STALE_GRACE`, worst first, as
         :func:`detect_stale_orders` returns them.  Each one stays in the rebuilt book after
         it has gone, so a diff feed's crossing is then partly this defect
-        rather than the feed's normal lag.
+        rather than the feed's normal lag.  ``attrs["clock"]`` names the
+        column that put trades in order with the order events.
     trade_attribution : TradeAttribution
         Which orders of a trade the feed can name (see
         :class:`~ob_analytics.protocols.TradeAttribution`); sets which sides
@@ -967,6 +1059,7 @@ class DataQualitySummary:
             "exchange_time_reordered": self.exchange_time_reordered,
             "clocks": str(self.clocks.value),
             "stale_orders": _stale_records(self.stale_orders),
+            "stale_orders_clock": self._stale_clock(),
             "trade_attribution": str(self.trade_attribution.value),
             "trades_matched_by_order": self.trades_matched_by_order,
             "maybe_bad_book_records": self.maybe_bad_book_records,
@@ -1125,6 +1218,16 @@ class DataQualitySummary:
             )
         return ""
 
+    def _stale_clock(self) -> str:
+        """The column that put trades in order with the order events."""
+        return str(self.stale_orders.attrs.get("clock", "timestamp"))
+
+    def _stale_clock_note(self) -> str:
+        """Says when the stale check ordered trades by the venue's time."""
+        if self._stale_clock() == "exchange_timestamp":
+            return " (trades ordered by the venue's time)"
+        return ""
+
     def _worst_stale(self) -> str:
         """The worst stale order: its id, side, price and time at the touch."""
         worst = self.stale_orders.iloc[0]
@@ -1228,6 +1331,7 @@ class DataQualitySummary:
                 "through and the venue did not report again within "
                 f"{STALE_GRACE.total_seconds():g} s; each stays in the rebuilt "
                 "book after it has gone"
+                + self._stale_clock_note()
                 + (
                     f". Worst: {self._worst_stale()}"
                     if not self.stale_orders.empty
@@ -1570,6 +1674,7 @@ def data_quality_summary(
     sequence_restarts: int = 0,
     trade_attribution: TradeAttribution = TradeAttribution.BOTH,
     clocks: Clocks = Clocks.BOTH,
+    trade_order: TradeOrder = TradeOrder.RECEIVE,
     venue_book: BookLevels | None = None,
 ) -> DataQualitySummary:
     """Summarise the data quality of one reconstructed session.
@@ -1642,6 +1747,14 @@ def data_quality_summary(
         time at all (a price-level file without ``exchange_timestamp``) is
         read as :attr:`~ob_analytics.protocols.Clocks.RECEIVE_ONLY` whatever
         is declared; an empty frame keeps the declaration.
+    trade_order : TradeOrder, optional
+        Which clock puts trades in order with the order events for the
+        stale-order check (see :func:`detect_stale_orders`).  Read it off the
+        source with :func:`~ob_analytics.protocols.trade_order_of`; a live
+        capture records it in ``meta.json``.  The venue clock is used only
+        when *clocks* is :attr:`~ob_analytics.protocols.Clocks.BOTH` and both
+        frames carry ``exchange_timestamp``; otherwise the check uses
+        ``timestamp``.
     venue_book : BookLevels, optional
         The venue's own book after every message, when the source supplies
         one: for LOBSTER, the orderbook file read by
@@ -1733,17 +1846,31 @@ def data_quality_summary(
     # Stale resting orders need per-order events and priced, timed trades.  An
     # L2 run has neither, and a trades frame without prices has nothing to
     # print through a resting order.
+    # A feed whose trades come on another connection is ordered by the venue's
+    # time, when the run has two clocks and both frames carry it.
     stale_orders = _empty_stale_orders()
+    trade_order = TradeOrder(trade_order)
     if (
         best is not None
         and not l2
         and not trades.empty
         and {"timestamp", "price"} <= set(trades.columns)
     ):
-        end_ns = _capture_end_ns(events, trades)
-        spans = _stale_spans(events, trades, STALE_GRACE, end_ns)
-        if not spans.empty:
-            stale_orders = _stale_orders(spans, best, end_ns, tick_size)
+        venue_clock = (
+            trade_order is TradeOrder.VENUE
+            and Clocks(clocks) is Clocks.BOTH
+            and _has_venue_time(events)
+            and _has_venue_time(trades)
+        )
+        stale_orders = _find_stale_orders(
+            events,
+            trades,
+            grace=STALE_GRACE,
+            tick_size=tick_size,
+            depth=depth,
+            best=best,
+            venue_clock=venue_clock,
+        )
 
     # Look only for the orders the feed can name: a feed that shows resting
     # orders only never shows a taker, so a missing taker there is the feed,

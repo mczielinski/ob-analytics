@@ -32,6 +32,7 @@ from ob_analytics import (
     LobsterSource,
     Severity,
     TradeAttribution,
+    TradeOrder,
     data_quality_summary,
     detect_stale_orders,
 )
@@ -41,7 +42,7 @@ from ob_analytics.book import order_book
 from ob_analytics.datasets import toy_events, toy_trades
 from ob_analytics.depth import price_level_volume
 from ob_analytics.engine import crossed_prefix_counts
-from ob_analytics.protocols import clocks_of, trade_attribution_of
+from ob_analytics.protocols import clocks_of, trade_attribution_of, trade_order_of
 from ob_analytics.quality import _faithful_best_series
 from tests import _lobster_few_levels as few
 
@@ -1049,6 +1050,193 @@ class TestStaleOrders:
         after = order_book(events)
         assert 2 in set(after.asks["id"])
         assert before.asks.equals(after.asks)
+
+
+# ---------------------------------------------------------------------------
+# Stale orders when trades come on another connection
+# ---------------------------------------------------------------------------
+
+
+def _sweep_then_rest() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """A taker bid that sweeps the ask at 101 and rests its remainder at 102.
+
+    The venue makes the trade at 101 at t=10.000 and the resting bid at
+    t=10.001.  The capture receives the book on one connection at t=10.002
+    and the trade on another at t=10.150, after the bid.  By receive time a
+    trade printed below a resting bid; by venue time the bid rested after the
+    trade.  The bid rests until the capture ends at t=100.
+    """
+    rows = [
+        # (event_id, id, receive s, price, volume, direction, action, fill)
+        (1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0),
+        (2, 2, 0.0, 101.0, 1.0, "ask", "created", 0.0),
+        (3, 3, 0.0, 103.0, 2.0, "ask", "created", 0.0),
+        (4, 2, 10.002, 101.0, 0.0, "ask", "deleted", 1.0),
+        (5, 10, 10.002, 102.0, 1.0, "bid", "created", 0.0),
+        (6, 4, 100.0, 98.0, 1.0, "bid", "created", 0.0),
+    ]
+    venue_seconds = [0.0, 0.0, 0.0, 10.001, 10.001, 100.0]
+    events = _classified(rows)
+    events["exchange_timestamp"] = pd.Series(
+        [_BASE + pd.Timedelta(seconds=t) for t in venue_seconds]
+    ).astype("datetime64[ns]")
+    trades = _trades([(10.150, 101.0)])
+    trades["exchange_timestamp"] = pd.Series(
+        [_BASE + pd.Timedelta(seconds=10.000)]
+    ).astype("datetime64[ns]")
+    return events, trades
+
+
+class TestStaleOrdersOnTheVenueClock:
+    def test_receive_order_reads_the_rested_remainder_as_stale(self):
+        events, trades = _sweep_then_rest()
+        stale = detect_stale_orders(events, trades)
+        assert stale["id"].tolist() == [10]
+        assert stale.attrs["clock"] == "timestamp"
+
+    def test_venue_order_finds_no_stale_order(self):
+        events, trades = _sweep_then_rest()
+        stale = detect_stale_orders(events, trades, trade_order=TradeOrder.VENUE)
+        assert stale.empty
+        assert stale.attrs["clock"] == "exchange_timestamp"
+
+    def test_venue_order_still_finds_a_real_stale_order(self):
+        (stale,) = detect_stale_orders(
+            _book_with_stale_ask(),
+            _through_trade().assign(exchange_timestamp=lambda t: t["timestamp"]),
+            trade_order=TradeOrder.VENUE,
+        ).itertuples(index=False)
+        assert stale.id == 2
+        assert stale.touch_seconds == pytest.approx(90.0)
+
+    def test_a_row_without_venue_time_keeps_its_receive_time(self):
+        events, trades = _sweep_then_rest()
+        events.loc[events["id"] == 10, "exchange_timestamp"] = pd.NaT
+        # The bid now rests at its receive time, 10.002, after the trade's
+        # venue time of 10.000, so it is still not stale.
+        stale = detect_stale_orders(events, trades, trade_order=TradeOrder.VENUE)
+        assert stale.empty
+
+    def test_trades_with_no_venue_time_fall_back_to_receive_order(self):
+        events, trades = _sweep_then_rest()
+        trades["exchange_timestamp"] = pd.NaT
+        stale = detect_stale_orders(events, trades, trade_order=TradeOrder.VENUE)
+        assert stale["id"].tolist() == [10]
+        assert stale.attrs["clock"] == "timestamp"
+
+    def test_venue_order_needs_venue_time_on_the_trades(self):
+        events, trades = _sweep_then_rest()
+        with pytest.raises(ConfigError, match="exchange_timestamp"):
+            detect_stale_orders(
+                events,
+                trades.drop(columns="exchange_timestamp"),
+                trade_order=TradeOrder.VENUE,
+            )
+
+    def test_summary_uses_the_declared_order(self):
+        events, trades = _sweep_then_rest()
+        s = data_quality_summary(
+            events,
+            trades,
+            feed_type=FeedType.DIFF_FEED,
+            trade_order=TradeOrder.VENUE,
+        )
+        assert s.stale_orders.empty
+        assert s.to_dict()["stale_orders_clock"] == "exchange_timestamp"
+
+    def test_summary_defaults_to_receive_order(self):
+        events, trades = _sweep_then_rest()
+        s = data_quality_summary(events, trades, feed_type=FeedType.DIFF_FEED)
+        assert s.stale_orders["id"].tolist() == [10]
+        assert s.to_dict()["stale_orders_clock"] == "timestamp"
+        check = next(c for c in s.checks if c.name == "stale_orders")
+        assert "venue's time" not in check.detail
+
+    def test_summary_keeps_receive_order_with_one_clock(self):
+        events, trades = _sweep_then_rest()
+        s = data_quality_summary(
+            events,
+            trades,
+            feed_type=FeedType.DIFF_FEED,
+            clocks=Clocks.RECEIVE_ONLY,
+            trade_order=TradeOrder.VENUE,
+        )
+        assert s.stale_orders["id"].tolist() == [10]
+
+    def test_the_check_says_which_clock_ordered_the_trades(self):
+        events, trades = _book_with_stale_ask(), _through_trade()
+        trades["exchange_timestamp"] = trades["timestamp"]
+        s = data_quality_summary(
+            events,
+            trades,
+            feed_type=FeedType.DIFF_FEED,
+            trade_order=TradeOrder.VENUE,
+        )
+        check = next(c for c in s.checks if c.name == "stale_orders")
+        assert "trades ordered by the venue's time" in check.detail
+
+    @staticmethod
+    def _capture(tmp_path, record):
+        """:func:`_sweep_then_rest` as a capture folder, times in ms."""
+        t0 = 1_777_691_156_000
+        orders = tmp_path / "orders.csv"
+        pd.DataFrame(
+            [
+                {
+                    "id": i,
+                    "timestamp": t0 + t,
+                    "exchange_timestamp": t0 + venue,
+                    "price": p,
+                    "volume": v,
+                    "action": a,
+                    "direction": d,
+                }
+                for i, t, venue, p, v, a, d in (
+                    (1, 0, 0, 99.0, 2.0, "created", "bid"),
+                    (2, 0, 0, 101.0, 1.0, "created", "ask"),
+                    (3, 0, 0, 103.0, 2.0, "created", "ask"),
+                    (2, 10_002, 10_001, 101.0, 1.0, "deleted", "ask"),
+                    (10, 10_002, 10_001, 102.0, 1.0, "created", "bid"),
+                    (4, 100_000, 100_000, 98.0, 1.0, "created", "bid"),
+                )
+            ]
+        ).to_csv(orders, index=False)
+        pd.DataFrame(
+            [
+                {
+                    "trade_id": 1,
+                    "timestamp": t0 + 10_150,
+                    "exchange_timestamp": t0 + 10_000,
+                    "price": 101.0,
+                    "amount": 1.0,
+                    "buy_order_id": 10,
+                    "sell_order_id": 2,
+                    "side": "buy",
+                }
+            ]
+        ).to_csv(tmp_path / "trades.csv", index=False)
+        if record:
+            (tmp_path / "meta.json").write_text(json.dumps(record))
+        return orders
+
+    @pytest.mark.parametrize(
+        ("record", "stale_ids"),
+        [({}, [10]), ({"source": "kraken", "trade_order": "venue"}, [])],
+        ids=["receive", "venue"],
+    )
+    def test_audit_reads_the_order_from_the_capture(self, tmp_path, record, stale_ids):
+        from ob_analytics import Pipeline
+
+        orders = self._capture(tmp_path, record)
+        result = Pipeline(source=BitstampSource()).run(orders)
+        assert result.trades["exchange_timestamp"].notna().all()
+        assert result.audit().stale_orders["id"].tolist() == stale_ids
+
+    def test_offline_sources_order_by_receive_time(self):
+        from ob_analytics.databento import DatabentoSource
+
+        for source in (BitstampSource(), LobsterSource(), DatabentoSource()):
+            assert trade_order_of(source) is TradeOrder.RECEIVE
 
 
 @pytest.fixture(scope="module")
