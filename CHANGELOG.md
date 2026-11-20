@@ -498,6 +498,18 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   capture. The source needs the new `kalshi` extra
   (`pip install "ob-analytics[kalshi]"`). `KalshiSource` and `KalshiSettings`
   are in `ob_analytics.live`.
+- **Kraken capture, order by order** (#555). `ob-analytics capture kraken
+  --pair BTC/USD` records Kraken's per-order (`level3`) book: each order with
+  its Kraken id, written as `created`, `changed` and `deleted`, plus the
+  public trades. It needs a Kraken API key with "WebSocket interface" on,
+  read from `KRAKEN_API_KEY` and `KRAKEN_API_SECRET`; a normal account can
+  make one. The capture checks Kraken's checksum after every message, and a
+  mismatch starts a new segment (`--on-checksum-failure count` only counts
+  it). An order that leaves the `--depth` window (1000 levels by default) is
+  kept open rather than written as a cancel. An amend (a `delete` and an
+  `add` of the same id) is written as one `changed` row, or as a cancel and
+  a new order under `<id>#1` when it shrinks the order. Checked live on
+  BTC/USD. `KrakenSource` and `KrakenSettings` are in `ob_analytics.live`.
 - **Every exported name has an API page entry** (#421). New Reference pages
   cover synthetic data (`ob_analytics.synth`), the sample and toy data
   (`ob_analytics.datasets`, `sample_csv_path`), queue positions

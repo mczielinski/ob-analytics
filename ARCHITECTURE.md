@@ -8,7 +8,7 @@ order; an L2 run skips the two marked *(L3)*.
 
 | Stage | What happens |
 |-------|-------------|
-| **Load & normalize** | A source's loader reads its files into one event table (L3) or one depth table (L2). Built-in offline sources: Bitstamp CSV, LOBSTER message and orderbook files, Databento DBN market-by-order, and the L2 depth CSV. The ccxt, cryptofeed and kalshi captures write files that these sources read |
+| **Load & normalize** | A source's loader reads its files into one event table (L3) or one depth table (L2). Built-in offline sources: Bitstamp CSV, LOBSTER message and orderbook files, Databento DBN market-by-order, and the L2 depth CSV. The ccxt, cryptofeed, kalshi and kraken captures write files that these sources read |
 | **Build trades** | Each source supplies its trades: Bitstamp and the captures read the companion `trades.csv`, LOBSTER takes the execution rows (types 4/5) from the message file, and Databento pairs each fill with the book event that took the size off |
 | **Classify orders** *(L3)* | `set_order_types`: label each order as *market*, *resting-limit*, *cancelled-limit*, *market-limit*, *pre-existing* (first seen mid-stream), or *unknown* |
 | **Price-level depth** | `price_level_volume`: track the volume at each price level. At L2 the loader reads this table directly. LOBSTER can use the official orderbook file for ground-truth depth |
@@ -385,7 +385,7 @@ ob_analytics/
 ├── _utils.py             # Validation, numerics, timestamp conversion helpers
 │
 ├── live/                 # Optional live-capture machinery ([live] / [kalshi] / [ccxt] / [cryptofeed] extras)
-│   ├── __init__.py       # live-source registration (ccxt, cryptofeed, kalshi) + re-exports
+│   ├── __init__.py       # live-source registration (ccxt, cryptofeed, kalshi, kraken) + re-exports
 │   ├── _base.py          # LiveSource protocol, CaptureConfig, CaptureResult, CaptureSink
 │   ├── _runner.py        # run_capturer: the asyncio driver for one segment
 │   ├── _supervisor.py    # run_capture: a capture of many segments, with reconnects, rolls and restarts
@@ -394,6 +394,7 @@ ob_analytics/
 │   ├── ccxt_source.py    # CcxtSource, CcxtSettings (any CCXT venue, L2)
 │   ├── cryptofeed_source.py  # CryptofeedSource, CryptofeedSettings (L2 or native L3)
 │   ├── kalshi.py         # KalshiSource, KalshiSettings (Kalshi WebSocket, L2, needs an API key)
+│   ├── kraken.py         # KrakenSource, KrakenSettings (Kraken level3 WebSocket, L3, needs an API key)
 │   └── _cryptofeed_venues.py # corrected cryptofeed venue feeds (Independent Reserve)
 │
 └── visualization/        # Plotting subsystem

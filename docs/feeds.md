@@ -43,8 +43,8 @@ Whether the feed shows single orders or only the total size at each price.
 
 - **Values:** L3, one row per order, with the order's id. L2, one row per price
   level, with no ids.
-- **Sources:** L3 is native Bitstamp, cryptofeed on its four per-order venues,
-  LOBSTER and Databento. L2 is everything else.
+- **Sources:** L3 is native Bitstamp, Kraken's `level3` channel, cryptofeed on
+  its four per-order venues, LOBSTER and Databento. L2 is everything else.
 - **Lets you conclude:** at L3, order lifetimes, queue position, order types,
   and the order behind each trade.
 - **Stops you concluding:** at L2, anything about single orders. A level that
@@ -424,13 +424,14 @@ What you need to capture the feed.
 
 - **Values:** public; an API key; a supported location; a paid subscription.
 - **Sources:** most crypto venues are public. Binance refuses some locations.
-  LOBSTER and Databento are paid. Kalshi's websocket and Coinbase's per-order
-  feed need a key.
+  LOBSTER and Databento are paid. Kalshi's websocket, Kraken's per-order
+  channel and Coinbase's per-order feed need a key.
 - **Lets you conclude:** whether you can capture it at all.
 - **Stops you concluding:** that one venue id means one market everywhere.
   From a refused location, `binanceus` is a separate venue with its own book.
   A feed that needs a key stops at the start with an authentication error.
-- **In the package:** ob-analytics does not use API keys yet.
+- **In the package:** a source declares the keys it needs, and reads them
+  from environment variables (see [Use an API key](howto/api-keys.md)).
 
 ## What the book shows
 
@@ -443,6 +444,7 @@ What you need to capture the feed.
 | cryptofeed, Independent Reserve | L3 | whole book | resting only |
 | `lobster` | L3 | the requested price levels | resting only |
 | `databento` | L3 | whole displayed book | resting only |
+| `kraken` | L3 | top 1,000 price levels a side by default; orders that leave them are kept | resting only |
 | cryptofeed, Bitstamp L2 | L2 | whole book | — |
 | cryptofeed, Kraken L2 | L2 | top 1,000 levels a side; levels that leave it are kept | — |
 | cryptofeed, Coinbase L2 | L2 | not checked: cryptofeed 2.4.1 needs an API key for Coinbase | — |
@@ -466,6 +468,7 @@ What you need to capture the feed.
 | cryptofeed, Independent Reserve | REST book newer than the stream, then every change | nothing found in testing | cryptofeed reconnects and takes a new opening book | skips messages for orders cryptofeed does not hold; only rises | venue + receive; the opening book receive only | matched book; failed the check in testing (58% crossed) |
 | `lobster` | every change | events outside the requested levels ([request enough levels](howto/lobster.md#request-enough-levels)) | — | none | venue only | matched book; the per-order book crosses when the levels are too few |
 | `databento` | every change | nothing (a file) | — | venue's where sent; only rises | venue + Databento receive | matched book |
+| `kraken` | opening book, then every change | when an order left the book while outside the window | the checksum fails; a new segment from a new opening book | none; a checksum of the top 10 levels on every message | venue + receive | matched book |
 | cryptofeed, Bitstamp L2 | REST book after 5 s, then changes | a lost message | drifts until the level changes again | none | venue + receive | price levels |
 | cryptofeed, Kraken L2 | changes | a lost message | drifts until the level changes again | none | receive only | price levels |
 | cryptofeed, Coinbase L2 | not checked: needs an API key | not checked | not checked | not checked | not checked | price levels |
@@ -486,7 +489,13 @@ Notes on this table:
   cryptofeed's check (`checksum_validation`) is off by default too. The
   package turns on neither. Kraken sends no sequence number either, so the
   only sign of drift is a crossed book, which the `crossed_book` check
-  reports. A book can drift without crossing.
+  reports. A book can drift without crossing. This is about Kraken's
+  price-level book; the `kraken` source checks its own checksum (below).
+- **`kraken`:** the source checks Kraken's checksum after every message. A
+  mismatch ends the segment, and the next starts from a new opening book. In
+  a 3-minute BTC/USD capture on 19 November 2026, all 55,802 checksums
+  matched; see
+  [Capture Kraken](howto/kraken.md#what-the-live-captures-showed).
 - **Coinbase:** Coinbase numbers its messages, but ccxt does not pass the number
   on.
 - **Polymarket:** each snapshot carries a hash of the book, which ccxt does not
@@ -531,6 +540,7 @@ Notes on this table:
 | cryptofeed, Independent Reserve | yes, from the tape | only when the book shows it (6 of 26 takers) | venue | from the tape | none found |
 | `lobster` | yes | guessed | from the execution row | execution rows | — |
 | `databento` | yes | never | venue | fill records | — |
+| `kraken` | never (the venue's trades carry no order ids) | never | venue | not linked | trades from before the opening book dropped |
 | cryptofeed, Bitstamp L2 | — | — | venue | — | a few trades from the 5 s before the REST book |
 | cryptofeed, Kraken L2 | — | — | venue | — | none |
 | cryptofeed, Coinbase L2 | — | — | not checked | — | not checked |
@@ -571,6 +581,7 @@ Note on this table:
 | cryptofeed, other L2 venues | not checked | normal | not checked |
 | `lobster` | from the file | normal | paid files |
 | `databento` | from the file | normal | paid, API key |
+| `kraken` | fixed (0.1 on BTC/USD) | normal | API key, free with a Kraken account |
 | ccxt, Binance | fixed (0.01 on BTC/USDT) | normal | refused in some locations: use `binanceus` or `--market-data-mirror` |
 | ccxt, Coinbase | fixed (0.01 on BTC/USD) | normal | `coinbase` is public; `coinbaseexchange` and the per-order feed need a key |
 | ccxt, Kraken | fixed (0.1 on BTC/USD) | normal | public |

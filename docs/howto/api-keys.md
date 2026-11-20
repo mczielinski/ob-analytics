@@ -133,11 +133,31 @@ Kalshi](kalshi.md#capture-every-change-with-an-api-key) shows a capture.
 Kalshi's REST capture through the `ccxt` source needs no key: see [Capture
 Kalshi](kalshi.md).
 
-### Planned
+### Kraken
 
-- Coinbase's per-order (L3) feed
-  ([#99](https://github.com/mczielinski/ob-analytics/issues/99)). Coinbase's
-  price-level (L2) book needs no key: see [Capture Coinbase](coinbase.md).
+The `kraken` source reads Kraken's per-order (`level3`) WebSocket channel. It
+uses your key to ask Kraken's REST API for a token, which opens the channel.
+Set two variables:
+
+| Variable | Holds |
+|---|---|
+| `KRAKEN_API_KEY` | the API key |
+| `KRAKEN_API_SECRET` | the key's private key (Kraken calls it the secret) |
+
+Kraken issues keys in the API settings of a Kraken account,
+<https://pro.kraken.com/app/settings/api>. A normal account can make one at no
+cost. Turn on **WebSocket interface**. Kraken also asks for at least one
+permission: tick one that only reads, such as **Query Open Orders & Trades**,
+and leave every permission that trades or moves funds off. The capture never
+trades or moves funds. Kraken shows both values once; save each in a file that
+only you can read. [Capture Kraken order by order](kraken.md) shows a capture.
+
+Kraken's price-level book through the `ccxt` source needs no key: see [Capture
+CCXT venues](ccxt.md).
+
+Coinbase's price-level (L2) book needs no key either: see [Capture
+Coinbase](coinbase.md). Its per-order feed is not reachable with a normal
+account's key.
 
 ## Write a source that needs a key
 
