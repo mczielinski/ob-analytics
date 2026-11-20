@@ -1036,13 +1036,12 @@ class KrakenSource:
             try:
                 price = float(_number(trade["price"]))
                 qty = float(_number(trade["qty"]))
-                side = trade["side"]
-                if side not in _TAKER_SIDES:
-                    raise ValueError(f"unknown side {side!r}")
-                venue_ts = _parse_time(trade["timestamp"])
-                if venue_ts is None:
-                    raise ValueError("no time")
-            except (KeyError, TypeError, ValueError, InvalidOperation):
+            except (KeyError, InvalidOperation):
+                self.dropped += 1
+                continue
+            side = trade.get("side")
+            venue_ts = _parse_time(trade.get("timestamp"))
+            if side not in _TAKER_SIDES or venue_ts is None:
                 self.dropped += 1
                 continue
             if self._snapshot_ts is not None and venue_ts < self._snapshot_ts:
@@ -1088,12 +1087,14 @@ class KrakenSource:
 
     def _order_fields(self, order: Any, where: str) -> tuple[str, Decimal, Decimal]:
         """``(order_id, price, qty)`` of one order; raise if it cannot be read."""
+        order_id = order.get("order_id") if isinstance(order, dict) else None
+        if not isinstance(order_id, str) or not order_id:
+            raise UnmappedMessageError(
+                f"cannot parse an order in {where}: {order!r} (no order id)"
+            )
         try:
-            order_id = order["order_id"]
-            if not isinstance(order_id, str) or not order_id:
-                raise ValueError(f"order id {order_id!r}")
             return order_id, _number(order["limit_price"]), _number(order["order_qty"])
-        except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        except (KeyError, InvalidOperation) as exc:
             raise UnmappedMessageError(
                 f"cannot parse an order in {where}: {order!r} ({exc!r})"
             ) from exc
