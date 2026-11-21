@@ -116,8 +116,9 @@ range.
 | `order_aggressiveness` | 0.16 | 1% |
 | `queue_positions` | 1.01 | 7% |
 
-One numpy kernel is about 85% of the run. The stateful FIFO loop is 7%, and
-everything the loader and the frames do together is under 10% — which is the
+Two stateful loops are about 90% of the run. `summarize_depth` replays the L2
+book one event at a time in Python and takes about 85%; the FIFO queue loop
+takes 7%. Everything the loader and the frames do together is under 10% — which is the
 number [ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md)
 asks for before a second
 dataframe library could pay for itself, and it falls well short of the 30% gate

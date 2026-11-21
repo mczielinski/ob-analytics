@@ -20,7 +20,9 @@ by the reference seconds, against the same ratio in the baseline.
     uv run python scripts/bench_scale.py --envelope         # the scale table
 
 Per stage, not per run: #138 should not start without proof that the rebuild
-loop, and not file reading or the depth kernels, is the slow part.
+loops, and not file reading or analytics, are the slow part. There are two:
+``depth_metrics`` replays the L2 book one event at a time, and
+``queue_positions`` walks the per-order queues.
 
 Memory is the process high-water mark read after each stage, not the allocation
 each stage makes: ``tracemalloc`` would attribute it properly but slows the code
