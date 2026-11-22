@@ -51,7 +51,7 @@ Data quality summary
   impossible values     : 49 non-positive price(s) / 0 negative volume(s) / 0 level row(s) below zero
   clock order           : 0 venue-after-receive / 11 reordered
   records after a gap   : not checked: the events carry no count of records flagged after a gap (only Databento flags them)
-  orders set aside      : not checked: the events carry no count of orders set aside (only Databento sets them aside)
+  orders set aside      : not checked: the events carry no count of orders set aside (only Databento sets them aside; a run saved by an older version has no count)
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
 Checks: 0 error(s), 4 warning(s)
   WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...

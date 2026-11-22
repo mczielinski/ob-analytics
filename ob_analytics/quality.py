@@ -39,6 +39,7 @@ from ob_analytics.schemas import (
     SEQUENCE_COLUMN,
     SET_ASIDE_ORDERS_ATTR,
     SNAPSHOT_ORIGIN,
+    SUB_DOLLAR_SETTING,
     time_order_keys,
     unsized_order_ids,
     validate_columns,
@@ -990,7 +991,7 @@ class DataQualitySummary:
         keeps them.  Read from the events ``attrs``
         (:data:`~ob_analytics.schemas.SET_ASIDE_ORDERS_ATTR`).  ``None`` when
         the events carry no count, as from a source that does not set orders
-        aside, and the check does not run.
+        aside or a run saved by an older version, and the check does not run.
     """
 
     feed_type: FeedType
@@ -1220,7 +1221,8 @@ class DataQualitySummary:
         if self.set_aside_orders is None:
             return (
                 "not checked: the events carry no count of orders set aside "
-                "(only Databento sets them aside)"
+                "(only Databento sets them aside; a run saved by an older "
+                "version has no count)"
             )
         return f"{self.set_aside_orders} order(s) off the tick grid"
 
@@ -1234,7 +1236,7 @@ class DataQualitySummary:
             Severity.WARNING,
             f"{self.set_aside_orders} order(s) are not in the book: they "
             "entered it under $1.00 at a price off the tick grid; "
-            "PipelineConfig(tick_size=0.0001, price_decimals=4) keeps them",
+            f"{SUB_DOLLAR_SETTING} keeps them",
         )
 
     def _clocks_note(self) -> str:

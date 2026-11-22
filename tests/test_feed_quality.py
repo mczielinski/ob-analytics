@@ -680,6 +680,7 @@ class TestQualityChecks:
         assert s.to_dict()["set_aside_orders"] is None
         check = next(c for c in s.checks if c.name == "set_aside_orders")
         assert check.skipped
+        assert not check.passed
         assert check.severity == Severity.INFO
         assert "orders set aside      : not checked" in s.render()
         assert check.detail.startswith("not checked")

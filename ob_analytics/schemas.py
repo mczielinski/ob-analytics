@@ -479,7 +479,13 @@ A US equity may quote under $1.00 in steps of $0.0001, finer than a cent
 tick.  :class:`~ob_analytics.databento.DatabentoLoader` sets aside an order
 that enters the book at such a price, puts the count here, and
 :func:`~ob_analytics.quality.data_quality_summary` reads it.  A frame without
-the key comes from a source that does not set orders aside."""
+the key comes from a source that does not set orders aside, or is a run
+saved by a version that did not record the count."""
+
+SUB_DOLLAR_SETTING: str = "PipelineConfig(tick_size=0.0001, price_decimals=4)"
+"""The setting that keeps the orders counted under :data:`SET_ASIDE_ORDERS_ATTR`.
+
+The loader's warning and the audit both name it."""
 
 
 LOADER_COUNT_ATTRS: tuple[str, ...] = (MAYBE_BAD_BOOK_ATTR, SET_ASIDE_ORDERS_ATTR)
