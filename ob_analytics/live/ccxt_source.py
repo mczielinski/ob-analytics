@@ -187,15 +187,14 @@ _WHOLE_BOOK_VENUES: dict[str, int] = {
     "binancecoinm": 1000,
 }
 
-#: Venues whose trades name the side of the maker, the resting order, and
-#: which ccxt passes on unchanged as the trade's side. The capture reverses
-#: that side so ``trades.csv`` names the taker's side, as every other venue's
-#: does. Coinbase Advanced Trade (``coinbase``) does this on both
-#: its websocket and its REST trades. Coinbase Exchange (``coinbaseexchange``)
-#: names the maker's side too, but ccxt already reverses it there.
+#: Venues whose trades name the side of the maker, the resting order. ccxt
+#: reverses that side for Coinbase Advanced Trade (``coinbase``), on both its
+#: websocket and its REST trades, so ``trades.csv`` names the taker's side as
+#: every other venue's does. meta.json records ``trade_side_reversed`` for
+#: these venues, so that a capture from before the reversal is told apart by
+#: its missing key. Coinbase Exchange (``coinbaseexchange``) names the
+#: maker's side too, and ccxt has always reversed it there.
 _MAKER_SIDE_VENUES = frozenset({"coinbase"})
-
-_REVERSED_SIDE = {"buy": "sell", "sell": "buy"}
 
 # The fewest levels ccxt is asked to track for a whole-book venue, whatever
 # depth_limit is: ccxt's own default, and deep enough that a shallow
@@ -428,9 +427,9 @@ class CcxtSource:
         # The instrument's price increment, when the venue's metadata gives
         # one; meta.json records it so the replay uses the same price grid.
         self.tick_size: float | None = None
-        # Whether trade sides are reversed from the maker's to the taker's;
-        # meta.json records it, so a capture from before the fix is told
-        # apart by its missing key.
+        # Whether the venue names the maker's side, which ccxt reverses to
+        # the taker's; meta.json records it, so a capture from before the
+        # reversal is told apart by its missing key.
         self.trade_side_reversed = False
         # How many times a price arrived between two ticks and the recorded
         # tick size was made finer to fit it (see _fit_tick).
@@ -877,14 +876,11 @@ class CcxtSource:
         """Map a CCXT trade to the universal trade-event shape.
 
         Public trades carry no order IDs, so ``buy_order_id`` /
-        ``sell_order_id`` are left empty; ``direction`` is the taker's side, which
-        is CCXT's side reversed on a venue that names the maker's (see
-        :data:`_MAKER_SIDE_VENUES`).
+        ``sell_order_id`` are left empty; ``direction`` is CCXT's side, which is
+        the taker's on every venue (see :data:`_MAKER_SIDE_VENUES`).
         """
         received = pd.Timestamp.now(tz="UTC").as_unit("ns")
         side = t.get("side") or ""
-        if self.trade_side_reversed:
-            side = _REVERSED_SIDE.get(side, side)
         return {
             "trade_id": t.get("id") or "",
             "timestamp": received,

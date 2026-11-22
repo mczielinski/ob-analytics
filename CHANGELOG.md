@@ -1773,6 +1773,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **Coinbase trade sides stay the taker's with ccxt 4.5.93** (#560). ccxt
+  4.5.93 reverses Coinbase's maker side to the taker's itself, so the ccxt
+  source's own reversal would have turned it back to the maker's. The source
+  no longer reverses it, and the `ccxt` extra now needs ccxt 4.5.93.
+  `meta.json` still records `trade_side_reversed` for a Coinbase capture.
 - **The matplotlib queue-position face draws in about 1 s, not 25 s** (#539).
   It drew one line for each order. It now draws one line collection for
   each fate, with one path for each order. The paths keep the line caps and
