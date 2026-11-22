@@ -42,7 +42,7 @@ jobs:
           fi
           gh run watch "$id" --exit-status --interval 30
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
       - run: uv build
