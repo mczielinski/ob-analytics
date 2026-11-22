@@ -2504,7 +2504,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bokeh", marker = "extra == 'bokeh'", specifier = ">=3.1" },
-    { name = "ccxt", marker = "extra == 'ccxt'", specifier = ">=4.5.90" },
+    { name = "ccxt", marker = "extra == 'ccxt'", specifier = ">=4.5.93" },
     { name = "cryptofeed", marker = "extra == 'cryptofeed'", specifier = ">=2.4.1" },
     { name = "cryptography", marker = "extra == 'kalshi'", specifier = ">=50.0.0" },
     { name = "databento", marker = "extra == 'databento'", specifier = ">=0.86" },

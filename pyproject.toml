@@ -43,10 +43,11 @@ kalshi = [
     "cryptography>=50.0.0",
 ]
 # The ccxt and cryptofeed floors are the oldest versions CI tests (the ones in
-# uv.lock). Older releases lack venues the sources use: ccxt 4.0 has no
-# Coinbase in ccxt.pro, and cryptofeed 2.0 has no Independent Reserve.
+# uv.lock). Older releases lack what the sources use: ccxt before 4.5.93 hands
+# over Coinbase's maker side as a trade's side, and cryptofeed 2.0 has no
+# Independent Reserve.
 ccxt = [
-    "ccxt>=4.5.90",
+    "ccxt>=4.5.93",
 ]
 cryptofeed = [
     "cryptofeed>=2.4.1",
