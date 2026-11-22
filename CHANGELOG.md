@@ -1773,14 +1773,9 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
-- **Coinbase trade sides stay the taker's with ccxt 4.5.93** (#560). ccxt
-  4.5.93 reverses Coinbase's maker side to the taker's itself, so the ccxt
-  source's own reversal would have turned it back to the maker's. The source
-  no longer reverses it, and the `ccxt` extra now needs ccxt 4.5.93.
-  `meta.json` still records `trade_side_reversed` for a Coinbase capture.
 - **A US-equity day with orders under $1 loads on the default Databento
-  tick** (#558). A US equity may quote under $1.00 in steps of $0.0001, so a
-  full day of AAPL holds six bids at $0.0001. Since #500, `DatabentoLoader`
+  tick** (#558). A US equity may quote under $1.00 in steps of $0.0001, so on
+  2026-11-10 AAPL on Nasdaq held six bids at $0.0001. Since #500, `DatabentoLoader`
   refused the whole day on its default cent tick; before #500, it rounded
   these bids to $0.00 with no warning. An order that enters the book under
   $1.00 at a price on the $0.0001 grid but off the tick grid is now set
@@ -1798,6 +1793,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   as `set_aside_orders` and by `audit` as the `set_aside_orders` warning,
   which names `PipelineConfig(tick_size=0.0001, price_decimals=4)`. A
   source that cannot set orders aside reports the check as not checked.
+- **Coinbase trade sides stay the taker's with ccxt 4.5.93** (#560). ccxt
+  4.5.93 reverses Coinbase's maker side to the taker's itself, so the ccxt
+  source's own reversal would have turned it back to the maker's. The source
+  no longer reverses it, and the `ccxt` extra now needs ccxt 4.5.93.
+  `meta.json` still records `trade_side_reversed` for a Coinbase capture.
 - **The matplotlib queue-position face draws in about 1 s, not 25 s** (#539).
   It drew one line for each order. It now draws one line collection for
   each fate, with one path for each order. The paths keep the line caps and
