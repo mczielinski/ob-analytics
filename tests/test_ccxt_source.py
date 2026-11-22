@@ -461,7 +461,7 @@ _COINBASE_TRADE = {
 
 
 class TestCoinbaseTradeSide:
-    """Coinbase names the maker's side; the capture records the taker's (#308)."""
+    """Coinbase names the maker's side; ccxt hands over the taker's (#308)."""
 
     def _capture(self, venue, tmp_path):
         ex = _FakeCcxtExchange(_WS_SNAPSHOT, [], [[_COINBASE_TRADE]], ws=True)
@@ -472,9 +472,9 @@ class TestCoinbaseTradeSide:
         meta = json.loads((out / "meta.json").read_text())
         return pd.read_csv(out / "trades.csv"), meta
 
-    def test_coinbase_side_is_reversed(self, tmp_path):
+    def test_coinbase_keeps_ccxts_side_and_records_the_reversal(self, tmp_path):
         trades, meta = self._capture("coinbase", tmp_path)
-        assert trades["direction"].tolist() == ["sell"]
+        assert trades["direction"].tolist() == ["buy"]
         assert meta["trade_side_reversed"] is True
 
     @pytest.mark.parametrize("venue", ["coinbaseexchange", "kraken"])
@@ -510,10 +510,10 @@ class TestCcxtInstalled:
 
         assert "ccxt" in list_sources()
 
-    def test_ccxt_passes_on_coinbases_maker_side(self):
-        # The capture reverses Coinbase's side because ccxt does not. If ccxt
-        # starts reversing it, the capture would reverse it back to the
-        # maker's side, so this pins ccxt's behaviour.
+    def test_ccxt_reverses_coinbases_maker_side(self):
+        # The capture keeps ccxt's side because ccxt reverses Coinbase's
+        # maker side to the taker's (since 4.5.93). If ccxt stops, trades.csv
+        # would hold the maker's side again, so this pins ccxt's behaviour.
         import ccxt.pro
 
         frame = {
@@ -524,7 +524,7 @@ class TestCcxtInstalled:
             "side": "BUY",
             "time": "2026-09-28T12:00:00.000Z",
         }
-        assert ccxt.pro.coinbase().parse_trade(frame)["side"] == "buy"
+        assert ccxt.pro.coinbase().parse_trade(frame)["side"] == "sell"
 
     def test_ccxt_reverses_coinbase_exchanges_side_itself(self):
         import ccxt.pro
