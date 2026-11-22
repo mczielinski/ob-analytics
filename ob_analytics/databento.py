@@ -130,6 +130,8 @@ from ob_analytics.protocols import (
 from ob_analytics.schemas import (
     MAYBE_BAD_BOOK_ATTR,
     SEQUENCE_COLUMN,
+    SET_ASIDE_ORDERS_ATTR,
+    SUB_DOLLAR_SETTING,
     TRADE_DTYPES,
     TRADE_SIDE_DTYPE,
     attach_instrument_identity,
@@ -169,9 +171,6 @@ ONE_DOLLAR = DBN_PRICE_DIVISOR
 #: $0.0001, in DBN's raw price units: the finest step a US equity may quote
 #: in under :data:`ONE_DOLLAR`.
 SUB_DOLLAR_STEP = DBN_PRICE_DIVISOR // 10_000
-
-#: The setting that keeps the orders under $1 the loader would set aside.
-_SUB_DOLLAR_CONFIG = "PipelineConfig(tick_size=0.0001, price_decimals=4)"
 
 
 #: The raw price that means "no price" (``INT64_MAX``).
@@ -542,7 +541,8 @@ class DatabentoLoader:
             ``action``, ``direction``, ``event_id``, ``original_number``,
             ``raw_event_type`` (the DBN action letter) and ``raw_size`` (the
             record's own ``size`` field).  ``attrs[MAYBE_BAD_BOOK_ATTR]``
-            holds :attr:`maybe_bad_book_records`.
+            holds :attr:`maybe_bad_book_records`, and
+            ``attrs[SET_ASIDE_ORDERS_ATTR]`` holds :attr:`set_aside_orders`.
         """
         logger.info("DatabentoLoader: reading {}", path)
         book = _BookFilter(self._settings)
@@ -626,7 +626,9 @@ class DatabentoLoader:
         flagged = _count_maybe_bad_book(raw)
         reading.flagged += flagged
 
+        set_aside_before = reading.set_aside_orders
         work = self._to_working_frame(raw, reading, first=reading.records + 1)
+        set_aside = reading.set_aside_orders - set_aside_before
         first_event = reading.events
         events, records = _book_events_and_fills(work, reading, last=last)
         reading.records += len(raw)
@@ -666,6 +668,7 @@ class DatabentoLoader:
         )
         events = cast_events(events)
         events.attrs[MAYBE_BAD_BOOK_ATTR] = flagged
+        events.attrs[SET_ASIDE_ORDERS_ATTR] = set_aside
         return events, records
 
     def _to_working_frame(
@@ -1057,7 +1060,7 @@ def _set_aside_sub_dollar_orders(
             "is not a whole "
             f"multiple of tick_size={tick_size!r} (for example {example!r}). "
             "A US equity may quote under $1.00 in steps of $0.0001. Load the "
-            f"file with {_SUB_DOLLAR_CONFIG}."
+            f"file with {SUB_DOLLAR_SETTING}."
         )
 
     last_epoch = int(epoch[-1]) if len(epoch) else 0
@@ -1081,7 +1084,7 @@ def _warn_on_set_aside(reading: _Reading, tick_size: float) -> int:
             "under $1.00 at a price that is not a whole multiple of "
             f"tick_size={tick_size!r}. A US equity may quote under $1.00 in "
             "steps of $0.0001. The book leaves these orders out; load the file "
-            f"with {_SUB_DOLLAR_CONFIG} to keep them",
+            f"with {SUB_DOLLAR_SETTING} to keep them",
             stacklevel=3,
         )
     return reading.set_aside_orders

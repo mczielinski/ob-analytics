@@ -1786,6 +1786,13 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   the book that moves to such a price raises `ConfigError` and names the same
   setting. Every other off-grid book price is still refused. Only the
   Databento loader does this; the other loaders are unchanged.
+- **The audit reports the orders set aside under $1** (#562). The count
+  was only in a warning while the file loaded and on the loader. It is now
+  on `events.attrs` under `SET_ASIDE_ORDERS_ATTR` (`"set_aside_orders"`),
+  saved with the run and read back, and reported by `data_quality_summary`
+  as `set_aside_orders` and by `audit` as the `set_aside_orders` warning,
+  which names `PipelineConfig(tick_size=0.0001, price_decimals=4)`. A
+  source that cannot set orders aside reports the check as not checked.
 - **Coinbase trade sides stay the taker's with ccxt 4.5.93** (#560). ccxt
   4.5.93 reverses Coinbase's maker side to the taker's itself, so the ccxt
   source's own reversal would have turned it back to the maker's. The source

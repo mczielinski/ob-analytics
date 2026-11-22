@@ -49,6 +49,7 @@ from ob_analytics.protocols import (
 from ob_analytics.quality import DataQualitySummary, data_quality_summary
 from ob_analytics.schemas import (
     MAYBE_BAD_BOOK_ATTR,
+    SET_ASIDE_ORDERS_ATTR,
     validate_events_df,
     validate_trades_df,
 )
@@ -1796,3 +1797,58 @@ class TestSubDollarPrices:
                 loader.trade_records, whole_loader.trade_records
             )
             assert loader.set_aside_orders == 1
+
+
+class TestSetAsideCount:
+    """The audit reports the orders set aside under $1 (#562)."""
+
+    def test_the_count_is_on_the_events(self):
+        with pytest.warns(UserWarning, match=r"set aside 1 order"):
+            _, events = load(WITH_STUB)
+        assert events.attrs[SET_ASIDE_ORDERS_ATTR] == 1
+
+    def test_a_set_aside_order_is_an_audit_warning(self):
+        with pytest.warns(UserWarning, match=r"set aside 1 order"):
+            summary = audit_frame(mbo_frame(WITH_STUB))
+
+        assert summary.set_aside_orders == 1
+        assert summary.to_dict()["set_aside_orders"] == 1
+        # A warning, not an error: the run still passes without --strict.
+        assert summary.ok
+        assert [check.name for check in summary.warnings] == ["set_aside_orders"]
+        assert "tick_size=0.0001, price_decimals=4" in summary.warnings[0].detail
+        assert "orders set aside      : 1 order(s)" in summary.render()
+
+    def test_a_run_with_none_set_aside_counts_zero(self):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message=".*set aside")
+            _, events = load(LIFECYCLE)
+            summary = audit_frame(mbo_frame(LIFECYCLE))
+
+        assert events.attrs[SET_ASIDE_ORDERS_ATTR] == 0
+        assert summary.set_aside_orders == 0
+        check = next(c for c in summary.checks if c.name == "set_aside_orders")
+        assert check.passed
+        assert check.severity == "warning"
+
+    def test_the_count_survives_a_saved_result(self, tmp_path):
+        with pytest.warns(UserWarning, match=r"set aside 1 order"):
+            result = Pipeline(source=DatabentoSource()).run(mbo_frame(WITH_STUB))
+        save_data(result, tmp_path / "saved")
+
+        loaded = load_result(tmp_path / "saved")
+        assert loaded.events.attrs[SET_ASIDE_ORDERS_ATTR] == 1
+        assert loaded.audit().set_aside_orders == 1
+
+    @pytest.mark.parametrize("caller_loader", [False, True], ids=["windowed", "whole"])
+    def test_a_windowed_run_counts_the_whole_input(self, tmp_path, caller_loader):
+        # One order set aside in each of two windows.
+        second = (STUB_ID + 1, "A", "B", px(0.0002), 10)
+        frame = mbo_frame([STUB_ADD, *LIFECYCLE, second])
+        cuts = [pd.Timestamp(T0 + 3 * 1_000_000, tz="UTC")]
+        loader = DatabentoLoader() if caller_loader else None
+        pipeline = Pipeline(source=DatabentoSource(), loader=loader)
+        with pytest.warns(UserWarning, match=r"set aside 2 order"):
+            out = pipeline.run_windows(frame, cuts, tmp_path / "w")
+
+        assert load_result(out).audit().set_aside_orders == 2

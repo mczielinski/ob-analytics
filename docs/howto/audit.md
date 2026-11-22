@@ -51,6 +51,7 @@ Data quality summary
   impossible values     : 49 non-positive price(s) / 0 negative volume(s) / 0 level row(s) below zero
   clock order           : 0 venue-after-receive / 11 reordered
   records after a gap   : not checked: the events carry no count of records flagged after a gap (only Databento flags them)
+  orders set aside      : not checked: the events carry no count of orders set aside (only Databento sets them aside; a run saved by an older version has no count)
   venue sequence        : 0 missing / 0 out-of-order (0 row(s) numbered)
 Checks: 0 error(s), 4 warning(s)
   WARNING orphan_orders: 13 order(s) are changed or deleted with no created event ...
@@ -76,6 +77,7 @@ Checks: 0 error(s), 4 warning(s)
 | **impossible values** | Levels priced at or below zero, negative volumes or fills, and depth rows where the events take more off a price level than they put on (the depth table holds such a level at zero) |
 | **clock order** | Rows the venue stamped *after* we received them, and messages that reached the capture out of venue order. The opening book's rows are left out; `not checked` when the data has one clock |
 | **records after a gap** | Records the venue flagged as coming after a gap in its feed that it could not repair, so the book may be wrong from the first of them on. Only Databento flags these (`F_MAYBE_BAD_BOOK`); `not checked` for every other source |
+| **orders set aside** | Orders the loader left out of the book because they entered it under $1.00 at a price off the tick grid. Only Databento sets these aside; `PipelineConfig(tick_size=0.0001, price_decimals=4)` keeps them. `not checked` for every other source |
 | **venue sequence** | Skipped and non-advancing sequence numbers: dropped and reordered messages ([gap detection](../api/quality.md)) |
 
 A high **crossed resting book** number on a `diff_feed` can be expected — see
@@ -111,8 +113,9 @@ A check that cannot run on the data is **skipped**: it says `not checked` and
 why, its severity is info, and in `--json` it has `"skipped": true` and
 `"passed": false`, so it is not counted as a pass. The clock checks on data
 with one clock, `venue_book` with no venue book to compare (any source but
-LOBSTER, and a saved run), and `maybe_bad_book` on events with no count of
-records flagged after a gap (any source but Databento) are skipped.
+LOBSTER, and a saved run), and `maybe_bad_book` and `set_aside_orders` on
+events with no count of flagged records or set-aside orders (any source but
+Databento) are skipped.
 
 Errors: `duplicate_event_ids`, `duplicate_created_ids`, `sequence_gaps`,
 `sequence_out_of_order`, `negative_volume`, `exchange_time_after_receive`, and
@@ -123,7 +126,8 @@ Warnings: `orphan_orders`, `stale_orders`, `nonpositive_price`,
 `per_order_book_crossed` when the per-order book is crossed for longer than the
 depth table, `venue_book` when the rebuilt book differs from the venue's own
 book in any row, `maybe_bad_book` when the venue flagged records after a gap,
-and `crossed_book` when no feed type was declared.
+`set_aside_orders` when the loader left orders off the tick grid out of the
+book, and `crossed_book` when no feed type was declared.
 
 Two of these are judgement calls worth stating plainly:
 

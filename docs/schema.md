@@ -283,9 +283,11 @@ version.
 Some loaders count things while they read the input, and put the counts on the
 frame's `attrs`. The Databento loader counts the records the venue flagged as
 coming after a gap it could not repair (`F_MAYBE_BAD_BOOK`), under
-`attrs["maybe_bad_book_records"]`. Each file records the counts on its frame
-as a JSON object under `ob_analytics_loader_counts`, for example
-`{"maybe_bad_book_records": 2}`. `load_data` and `load_result` put them back
+`attrs["maybe_bad_book_records"]`, and the orders it left out of the book
+because they entered it under $1.00 at a price off the tick grid, under
+`attrs["set_aside_orders"]`. Each file records the counts on its frame as a
+JSON object under `ob_analytics_loader_counts`, for example
+`{"maybe_bad_book_records": 2, "set_aside_orders": 0}`. `load_data` and `load_result` put them back
 on the frame's `attrs`, so `result.audit()` and
 `ob-analytics audit --from-parquet` make the same check on a saved run as on
 the run itself. A windowed run records the sum over its windows in its

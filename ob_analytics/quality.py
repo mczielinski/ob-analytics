@@ -37,7 +37,9 @@ from ob_analytics.schemas import (
     MAYBE_BAD_BOOK_ATTR,
     ORIGIN_COLUMN,
     SEQUENCE_COLUMN,
+    SET_ASIDE_ORDERS_ATTR,
     SNAPSHOT_ORIGIN,
+    SUB_DOLLAR_SETTING,
     time_order_keys,
     unsized_order_ids,
     validate_columns,
@@ -982,6 +984,14 @@ class DataQualitySummary:
         (:data:`~ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR`).  ``None`` when
         the events carry no count, as from a source that does not flag such
         records, and the check does not run.
+    set_aside_orders : int or None
+        Orders the loader left out of the book because they entered it at a
+        price off the tick grid (a US equity under $1.00 quoting in steps of
+        $0.0001).  ``PipelineConfig(tick_size=0.0001, price_decimals=4)``
+        keeps them.  Read from the events ``attrs``
+        (:data:`~ob_analytics.schemas.SET_ASIDE_ORDERS_ATTR`).  ``None`` when
+        the events carry no count, as from a source that does not set orders
+        aside or a run saved by an older version, and the check does not run.
     """
 
     feed_type: FeedType
@@ -1020,6 +1030,7 @@ class DataQualitySummary:
     venue_book_differing_rows: int = 0
     venue_book_first_difference: BookDifference | None = None
     maybe_bad_book_records: int | None = None
+    set_aside_orders: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the summary as a plain, JSON-serialisable dict."""
@@ -1063,6 +1074,7 @@ class DataQualitySummary:
             "trade_attribution": str(self.trade_attribution.value),
             "trades_matched_by_order": self.trades_matched_by_order,
             "maybe_bad_book_records": self.maybe_bad_book_records,
+            "set_aside_orders": self.set_aside_orders,
             "ok": self.ok,
             "checks": [c.to_dict() for c in self.checks],
         }
@@ -1202,6 +1214,29 @@ class DataQualitySummary:
             f"{self.maybe_bad_book_records} record(s) carry the venue's flag "
             "for a gap in its feed that it could not repair, so the book may "
             "be wrong from the first of them on",
+        )
+
+    def _set_aside(self) -> str:
+        """The ``set_aside_orders`` count in words, or why it is not."""
+        if self.set_aside_orders is None:
+            return (
+                "not checked: the events carry no count of orders set aside "
+                "(only Databento sets them aside; a run saved by an older "
+                "version has no count)"
+            )
+        return f"{self.set_aside_orders} order(s) off the tick grid"
+
+    def _set_aside_check(self) -> QualityCheck:
+        """The set-aside-orders check, or a skipped one when nothing was counted."""
+        if self.set_aside_orders is None:
+            return QualityCheck.skip("set_aside_orders", self._set_aside())
+        return QualityCheck(
+            "set_aside_orders",
+            self.set_aside_orders == 0,
+            Severity.WARNING,
+            f"{self.set_aside_orders} order(s) are not in the book: they "
+            "entered it under $1.00 at a price off the tick grid; "
+            f"{SUB_DOLLAR_SETTING} keeps them",
         )
 
     def _clocks_note(self) -> str:
@@ -1376,6 +1411,7 @@ class DataQualitySummary:
             ),
             *self._clock_checks(),
             self._maybe_bad_book_check(),
+            self._set_aside_check(),
         ]
         order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
         return tuple(sorted(checks, key=lambda c: order[c.severity]))
@@ -1477,6 +1513,7 @@ class DataQualitySummary:
             ),
             f"  clock order           : {clock_order}",
             f"  records after a gap   : {self._maybe_bad_book()}",
+            f"  orders set aside      : {self._set_aside()}",
             (
                 f"  venue sequence        : {missing} / "
                 f"{self.sequence_out_of_order} out-of-order "
@@ -1686,7 +1723,10 @@ def data_quality_summary(
     A source whose feed flags records that come after a gap it could not
     repair (Databento) puts their count on ``events.attrs`` under
     :data:`~ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR`; the summary reports
-    it as ``maybe_bad_book_records``.
+    it as ``maybe_bad_book_records``.  A source that sets aside orders off
+    the tick grid (Databento, under $1.00) puts their count under
+    :data:`~ob_analytics.schemas.SET_ASIDE_ORDERS_ATTR`; the summary reports
+    it as ``set_aside_orders``.
 
     For a pipeline run, call
     :meth:`~ob_analytics.pipeline.PipelineResult.audit` instead: it passes
@@ -1936,6 +1976,7 @@ def data_quality_summary(
     # The source puts the count on the events when its feed can flag records
     # after a gap; without the key, nothing was checked.
     maybe_bad_book = events.attrs.get(MAYBE_BAD_BOOK_ATTR)
+    set_aside = events.attrs.get(SET_ASIDE_ORDERS_ATTR)
 
     return DataQualitySummary(
         feed_type=feed_type,
@@ -1973,4 +2014,5 @@ def data_quality_summary(
         maybe_bad_book_records=(
             None if maybe_bad_book is None else int(maybe_bad_book)
         ),
+        set_aside_orders=None if set_aside is None else int(set_aside),
     )

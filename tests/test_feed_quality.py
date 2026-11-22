@@ -670,6 +670,19 @@ class TestQualityChecks:
         assert check.skipped
         assert not check.passed
         assert check.severity == Severity.INFO
+
+    def test_a_feed_that_cannot_set_orders_aside_is_not_checked(self):
+        # Only a source that sets orders aside puts the count on the events
+        # (#562); without it the check is a note, not a pass.
+        ev = _classified([(1, 1, 0.0, 99.0, 2.0, "bid", "created", 0.0)])
+        s = data_quality_summary(ev, _empty_trades())
+        assert s.set_aside_orders is None
+        assert s.to_dict()["set_aside_orders"] is None
+        check = next(c for c in s.checks if c.name == "set_aside_orders")
+        assert check.skipped
+        assert not check.passed
+        assert check.severity == Severity.INFO
+        assert "orders set aside      : not checked" in s.render()
         assert check.detail.startswith("not checked")
         assert "records after a gap   : not checked" in s.render()
 
