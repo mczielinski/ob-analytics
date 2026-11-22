@@ -162,6 +162,17 @@ DBN_PRICE_DIVISOR = 1_000_000_000
 #: size is the venue's own count.
 DATABENTO_GRID = InstrumentGrid(tick_size=0.01, lot_size=1.0)
 
+#: One dollar, in DBN's raw price units.  Under it a US equity may quote in
+#: steps of :data:`SUB_DOLLAR_STEP` (Reg NMS Rule 612), off the cent grid.
+ONE_DOLLAR = DBN_PRICE_DIVISOR
+
+#: $0.0001, in DBN's raw price units: the finest step a US equity may quote
+#: in under :data:`ONE_DOLLAR`.
+SUB_DOLLAR_STEP = DBN_PRICE_DIVISOR // 10_000
+
+#: The setting that keeps the orders under $1 the loader would set aside.
+_SUB_DOLLAR_CONFIG = "PipelineConfig(tick_size=0.0001, price_decimals=4)"
+
 
 #: The raw price that means "no price" (``INT64_MAX``).
 UNDEF_PRICE = 9_223_372_036_854_775_807
@@ -465,6 +476,17 @@ class DatabentoLoader:
         warning.  A trade or fill can print between two ticks (a midpoint
         execution), and a clear's price is never read, so neither is checked:
         both are rounded to the nearest tick.
+
+        A US equity may quote under $1.00 in steps of $0.0001, so a book can
+        hold a few orders, often placeholder bids far from the market, that
+        are not on a cent grid.  An order that enters the book at such a
+        price is set aside: all of its records are left out, and one warning
+        says how many orders went and that
+        ``PipelineConfig(tick_size=0.0001, price_decimals=4)`` keeps them.
+        :attr:`set_aside_orders` counts them.  An order already on the book
+        that moves to such a price raises ``ConfigError`` instead, because
+        leaving out the rest of its records would leave it resting at its
+        old price.
     settings : DatabentoSettings, optional
         Which instrument and publisher of a multi-instrument file to read.
     venue, symbol : str, optional
@@ -496,6 +518,10 @@ class DatabentoLoader:
         #: ``F_MAYBE_BAD_BOOK``: Databento's mark for a record after a gap it
         #: could not repair.  ``0`` before the first load.
         self.maybe_bad_book_records: int = 0
+        #: How many orders the last :meth:`load` set aside because they
+        #: entered the book under $1.00 at a price off the tick grid.  ``0``
+        #: before the first load.
+        self.set_aside_orders: int = 0
 
     #: How many records :meth:`load_windows` reads from the file at a time.
     read_size: int = 250_000
@@ -525,6 +551,7 @@ class DatabentoLoader:
         reading = _Reading()
         events, records = self._read_part(raw, reading, last=True)
         self.maybe_bad_book_records = _warn_on_maybe_bad_book(reading)
+        self.set_aside_orders = _warn_on_set_aside(reading, self._config.tick_size)
         self.trade_records = _in_record_order([records])
         return events
 
@@ -584,6 +611,7 @@ class DatabentoLoader:
             records.append(part_records)
             yield LoadedWindow(events, part_records["maker_event_id"].dropna().unique())
         self.maybe_bad_book_records = _warn_on_maybe_bad_book(reading)
+        self.set_aside_orders = _warn_on_set_aside(reading, self._config.tick_size)
         self.trade_records = _in_record_order(records)
 
     def _read_part(
@@ -598,7 +626,7 @@ class DatabentoLoader:
         flagged = _count_maybe_bad_book(raw)
         reading.flagged += flagged
 
-        work = self._to_working_frame(raw, first=reading.records + 1)
+        work = self._to_working_frame(raw, reading, first=reading.records + 1)
         first_event = reading.events
         events, records = _book_events_and_fills(work, reading, last=last)
         reading.records += len(raw)
@@ -640,13 +668,17 @@ class DatabentoLoader:
         events.attrs[MAYBE_BAD_BOOK_ATTR] = flagged
         return events, records
 
-    def _to_working_frame(self, raw: pd.DataFrame, *, first: int) -> pd.DataFrame:
+    def _to_working_frame(
+        self, raw: pd.DataFrame, reading: _Reading, *, first: int
+    ) -> pd.DataFrame:
         """Return the columns the mapping needs, typed and in file order.
 
         Keeps the file's own row order: a fill is charged to the book event
         that follows it, so re-sorting here would break the pairing.  The
         1-based file position is kept as ``original_number``; *raw*'s first
-        record is at *first*.
+        record is at *first*.  The orders under $1.00 off the tick grid are
+        set aside (:func:`_set_aside_sub_dollar_orders`), and *reading* keeps
+        their ids for the parts after.
         """
         cfg = self._config
         action = raw["action"].astype(str).str.strip()
@@ -670,6 +702,7 @@ class DatabentoLoader:
 
         work["direction"] = work["side"].map(_SIDE_TO_DIRECTION)
         work = _usable_records(work)
+        work = _set_aside_sub_dollar_orders(work, reading, cfg.tick_size)
 
         # Canonical price is integer ticks (issue #155) and canonical size
         # integer lots (issue #226).  The raw price is Databento's fixed-point
@@ -788,6 +821,13 @@ class _Reading:
     #: Records carrying ``F_MAYBE_BAD_BOOK``, for the warning once the file
     #: is done.
     flagged: int = 0
+    #: The ids of the orders set aside since the last clear, whose later
+    #: records are set aside too.
+    set_aside: pd.Index = field(default_factory=lambda: pd.Index([], dtype="int64"))
+    #: Orders and records set aside so far, for the warning once the file is
+    #: done.
+    set_aside_orders: int = 0
+    set_aside_records: int = 0
 
 
 def _window_records(
@@ -946,6 +986,105 @@ def _usable_records(work: pd.DataFrame) -> pd.DataFrame:
     if keep.all():
         return work
     return work[keep].reset_index(drop=True)
+
+
+def _set_aside_sub_dollar_orders(
+    work: pd.DataFrame, reading: _Reading, tick_size: float
+) -> pd.DataFrame:
+    """Return *work* without the orders that enter the book under $1.00 off grid.
+
+    A US equity may quote under $1.00 in steps of $0.0001 (Reg NMS Rule
+    612), so a book on a cent grid can hold a few orders it cannot place.  An
+    order whose first book record is at such a price is set aside: that record
+    and every later record of the order until the next clear.  The price must
+    be above zero and on the $0.0001 grid as well, so a negative price (a
+    futures spread, say) or a tick size that is wrong for the instrument is
+    still refused.  The ids carry over in *reading*, as do the
+    counts for :func:`_warn_on_set_aside`.
+
+    An order the book already holds (from an earlier record, or an earlier
+    part) that moves to such a price raises: setting its later records aside
+    would leave it resting at its old price.
+    """
+    action = work["action"].to_numpy()
+    raw_price = work["raw_price"].to_numpy()
+    is_book = np.isin(action, list(BOOK_ACTIONS))
+    sub_dollar = (
+        is_book
+        & (raw_price > 0)
+        & (raw_price < ONE_DOLLAR)
+        & (raw_price % SUB_DOLLAR_STEP == 0)
+        & off_tick_grid(raw_price / DBN_PRICE_DIVISOR, tick_size)
+    )
+    if not sub_dollar.any() and not len(reading.set_aside):
+        return work
+
+    # A clear ends every order, so an id before it and the same id after it
+    # are two orders, as in the action mapping.
+    epoch = np.cumsum(action == ACTION_CLEAR)
+    ids = work["id"].to_numpy()
+    keys = pd.MultiIndex.from_arrays([epoch, ids])
+    first_of_order = np.zeros(len(work), dtype=bool)
+    first_of_order[is_book] = ~keys[is_book].duplicated()
+    # An order an earlier part left, on the book, gone or set aside, did not
+    # enter here.  Each pool is scanned for the few candidates rather than
+    # the candidates looked up in it: the gone ids can number millions on a
+    # day with no clear.
+    entering = sub_dollar & first_of_order
+    candidates = np.flatnonzero(entering & (epoch == 0))
+    if len(candidates):
+        found = ids[candidates]
+        pools = [reading.gone, reading.set_aside]
+        if reading.book is not None:
+            pools.append(pd.Index(reading.book["id"], dtype="int64"))
+        held = np.zeros(len(found), dtype=bool)
+        for pool in pools:
+            held |= np.isin(found, pool[pool.isin(found)])
+        entering[candidates[held]] = False
+
+    carried = pd.MultiIndex.from_arrays(
+        [np.zeros(len(reading.set_aside), dtype=epoch.dtype), reading.set_aside]
+    )
+    aside = keys[entering].append(carried)
+    dropped = keys.isin(aside) & (action != ACTION_CLEAR)
+
+    moved = sub_dollar & ~dropped
+    if moved.any():
+        example = float(raw_price[moved][0] / DBN_PRICE_DIVISOR)
+        raise ConfigError(
+            f"DatabentoLoader: {int(moved.sum())} book record(s) give an order "
+            "the book already holds, or held earlier, a price under $1.00 that "
+            "is not a whole "
+            f"multiple of tick_size={tick_size!r} (for example {example!r}). "
+            "A US equity may quote under $1.00 in steps of $0.0001. Load the "
+            f"file with {_SUB_DOLLAR_CONFIG}."
+        )
+
+    last_epoch = int(epoch[-1]) if len(epoch) else 0
+    reading.set_aside = pd.Index(
+        aside.get_level_values(1)[aside.get_level_values(0) == last_epoch],
+        dtype="int64",
+    ).unique()
+    reading.set_aside_orders += int(entering.sum())
+    reading.set_aside_records += int(dropped.sum())
+    if not dropped.any():
+        return work
+    return work[~dropped].reset_index(drop=True)
+
+
+def _warn_on_set_aside(reading: _Reading, tick_size: float) -> int:
+    """Warn when orders under $1.00 were set aside, and return how many were."""
+    if reading.set_aside_orders:
+        warnings.warn(
+            f"DatabentoLoader: set aside {reading.set_aside_orders} order(s) "
+            f"({reading.set_aside_records} record(s)) that entered the book "
+            "under $1.00 at a price that is not a whole multiple of "
+            f"tick_size={tick_size!r}. A US equity may quote under $1.00 in "
+            "steps of $0.0001. The book leaves these orders out; load the file "
+            f"with {_SUB_DOLLAR_CONFIG} to keep them",
+            stacklevel=3,
+        )
+    return reading.set_aside_orders
 
 
 def _reject_aggregated_records(raw: pd.DataFrame) -> None:

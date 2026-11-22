@@ -1773,6 +1773,19 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Fixed
 
+- **A US-equity day with orders under $1 loads on the default Databento
+  tick** (#558). A US equity may quote under $1.00 in steps of $0.0001, so a
+  full day of AAPL holds six bids at $0.0001. Since #500, `DatabentoLoader`
+  refused the whole day on its default cent tick; before #500, it rounded
+  these bids to $0.00 with no warning. An order that enters the book under
+  $1.00 at a price on the $0.0001 grid but off the tick grid is now set
+  aside: every record of it is left out until the next clear, and one
+  `UserWarning` gives the number of orders and records and names
+  `PipelineConfig(tick_size=0.0001, price_decimals=4)`, which keeps them.
+  `DatabentoLoader.set_aside_orders` holds the count. An order already on
+  the book that moves to such a price raises `ConfigError` and names the same
+  setting. Every other off-grid book price is still refused. Only the
+  Databento loader does this; the other loaders are unchanged.
 - **The matplotlib queue-position face draws in about 1 s, not 25 s** (#539).
   It drew one line for each order. It now draws one line collection for
   each fate, with one path for each order. The paths keep the line caps and

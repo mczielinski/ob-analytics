@@ -1676,3 +1676,123 @@ class TestOffGridPrices:
     def test_a_clear_with_no_price_is_not_checked(self):
         _, events = load([(0, "R", "N", UNDEF_PRICE, 0), *LIFECYCLE])
         assert len(events) > 0
+
+
+#: The order book above $1 that the stub order below sits next to.
+STUB_ID = 9
+STUB_ADD = (STUB_ID, "A", "B", px(0.0001), 40)
+STUB_CANCEL = (STUB_ID, "C", "B", px(0.0001), 40)
+#: A bid priced in $0.0001 steps under $1, as Reg NMS Rule 612 allows, added
+#: before the book above $1 and cancelled after it.
+WITH_STUB = [STUB_ADD, *LIFECYCLE, STUB_CANCEL]
+
+
+class TestSubDollarPrices:
+    """An order that enters the book under $1 at a price off the cent grid is
+    set aside with a warning; every other off-grid book price is refused
+    (#558)."""
+
+    def test_a_sub_dollar_order_is_set_aside_with_a_warning(self):
+        _, plain = load(LIFECYCLE)
+        with pytest.warns(
+            UserWarning,
+            match=r"set aside 1 order\(s\) \(2 record\(s\)\).*"
+            r"tick_size=0\.0001, price_decimals=4",
+        ):
+            loader, events = load(WITH_STUB)
+
+        assert STUB_ID not in set(events["id"])
+        assert loader.set_aside_orders == 1
+        columns = ["id", "action", "price", "volume", "direction"]
+        pd.testing.assert_frame_equal(events[columns], plain[columns])
+
+    def test_the_finer_tick_keeps_the_order(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            loader, events = load(
+                WITH_STUB, _config(tick_size=0.0001, price_decimals=4)
+            )
+        stub = events[events["id"] == STUB_ID]
+        assert list(stub["action"]) == ["created", "deleted"]
+        assert list(stub["price"]) == [1, 1]
+        assert loader.set_aside_orders == 0
+
+    def test_a_sub_dollar_price_on_the_cent_grid_is_kept(self):
+        records = [(STUB_ID, "A", "B", px(0.5), 40), *LIFECYCLE]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            loader, events = load(records)
+        assert events.loc[events["id"] == STUB_ID, "price"].tolist() == [50]
+        assert loader.set_aside_orders == 0
+
+    @pytest.mark.parametrize("price", [-0.0001, 0.00005])
+    def test_a_price_rule_612_does_not_cover_is_refused(self, price):
+        # A negative price (a futures spread) is not a sub-dollar quote, and
+        # a price off the $0.0001 grid means the tick size is wrong.
+        records = [(STUB_ID, "A", "B", px(price), 40), *LIFECYCLE]
+        with pytest.raises(ConfigError, match=r"'price' column"):
+            load(records)
+
+    def test_an_order_moved_under_a_dollar_off_the_grid_is_refused(self):
+        # The order is on the book already, so setting its later records aside
+        # would leave it resting at its old price.
+        records = [
+            (STUB_ID, "A", "B", px(1.5), 40),
+            *LIFECYCLE,
+            (STUB_ID, "M", "B", px(0.9999), 40),
+        ]
+        with pytest.raises(
+            ConfigError, match=r"under \$1\.00.*tick_size=0\.0001, price_decimals=4"
+        ):
+            load(records)
+
+    def test_a_gone_order_given_a_sub_dollar_price_is_refused(self):
+        # Before a clear, a reused id is the same order, which has been on the
+        # book.
+        records = [
+            (STUB_ID, "A", "B", px(1.5), 40),
+            (STUB_ID, "C", "B", px(1.5), 40),
+            *LIFECYCLE,
+            STUB_ADD,
+        ]
+        with pytest.raises(ConfigError, match=r"held earlier, a price under"):
+            load(records)
+
+    def test_the_fills_of_a_set_aside_order_go_with_it(self):
+        records = [
+            STUB_ADD,
+            *LIFECYCLE,
+            (0, "T", "A", px(0.0001), 10),
+            (STUB_ID, "F", "B", px(0.0001), 10),
+            (STUB_ID, "C", "B", px(0.0001), 30),
+        ]
+        with pytest.warns(UserWarning, match=r"1 order\(s\) \(3 record\(s\)\)"):
+            loader, events = load(records)
+        assert STUB_ID not in set(events["id"])
+        assert STUB_ID not in set(loader.trade_records["maker"].dropna())
+
+    def test_a_set_aside_order_reused_after_a_clear_is_a_new_order(self):
+        records = [
+            STUB_ADD,
+            (0, "R", "N", UNDEF_PRICE, 0),
+            (STUB_ID, "A", "B", px(100.2), 10),
+        ]
+        with pytest.warns(UserWarning, match=r"set aside 1 order"):
+            _, events = load(records)
+        assert events.loc[events["id"] == STUB_ID, "price"].tolist() == [10_020]
+
+    @pytest.mark.parametrize("read_size", [1, 4, 1000])
+    def test_the_windows_set_aside_what_the_whole_read_does(self, read_size):
+        frame = mbo_frame(WITH_STUB)
+        with pytest.warns(UserWarning, match=r"set aside 1 order"):
+            whole_loader, whole = load(frame)
+
+        for cuts in cut_sets(frame):
+            with pytest.warns(UserWarning, match=r"set aside 1 order"):
+                loader, windows = load_windows(frame, cuts, read_size=read_size)
+            joined = pd.concat([w.events for w in windows], ignore_index=True)
+            pd.testing.assert_frame_equal(joined, whole)
+            pd.testing.assert_frame_equal(
+                loader.trade_records, whole_loader.trade_records
+            )
+            assert loader.set_aside_orders == 1
