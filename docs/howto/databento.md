@@ -97,6 +97,43 @@ The fixed-point scale of the raw prices (one raw unit is 10⁻⁹ of the quote
 currency) is a property of DBN, not of the instrument, so the loader knows it
 and there is nothing to set.
 
+A book price that is not a whole number of ticks raises `ConfigError`, and
+the message names the tick size. Set the instrument's real tick size and run
+again.
+
+### Prices under $1
+
+A US equity may quote under $1.00 in steps of $0.0001 (Reg NMS Rule 612), so
+a book on the default cent tick can hold a few orders it cannot place. On a
+stock that trades above $1, these are usually placeholder bids far from the
+market. On 10 November 2026, AAPL on Nasdaq held six bids of 40 shares at
+$0.0001 from before the open to the close.
+
+- **An order that enters the book under $1.00 at a price off the tick grid
+  is set aside.** The loader leaves out every record of the order until the
+  next clear and warns once with the number of orders and records it left
+  out. `DatabentoLoader.set_aside_orders` holds the count.
+- **An order already on the book that moves to such a price raises
+  `ConfigError`.** Leaving out its later records would leave it resting at
+  its old price.
+- **A price under $1.00 on the cent grid is kept**, for example $0.50.
+
+To keep these orders, load the file on a $0.0001 tick:
+
+<!-- docs-test: skip needs a Databento file -->
+
+```python
+from ob_analytics import Pipeline, PipelineConfig
+from ob_analytics.databento import DatabentoSource
+
+config = PipelineConfig(tick_size=0.0001, price_decimals=4)
+result = Pipeline(config, source=DatabentoSource()).run("aapl.mbo.dbn.zst")
+```
+
+Every price is then 100 times larger in ticks, and prices show four decimal
+places. A stock that trades under $1 needs this setting, or the loader sets
+aside most of its book.
+
 ## Pick one instrument out of a file
 
 A DBN file can hold several instruments, and a consolidated dataset such as
