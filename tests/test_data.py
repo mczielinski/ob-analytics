@@ -255,7 +255,10 @@ class TestLoaderCounts:
         save_data(self._flagged_run(), tmp_path)
 
         metadata = pq.read_schema(tmp_path / "events.parquet").metadata
-        assert json.loads(metadata[LOADER_COUNTS_KEY]) == {"maybe_bad_book_records": 1}
+        assert json.loads(metadata[LOADER_COUNTS_KEY]) == {
+            "maybe_bad_book_records": 1,
+            "set_aside_orders": 0,
+        }
         # Stored once: not again in pandas' own metadata.
         assert b"maybe_bad_book_records" not in metadata[b"pandas"]
 
@@ -276,7 +279,7 @@ class TestLoaderCounts:
         tables = self._flagged_run().to_arrow()
 
         counts = json.loads(tables["events"].schema.metadata[LOADER_COUNTS_KEY])
-        assert counts == {"maybe_bad_book_records": 1}
+        assert counts == {"maybe_bad_book_records": 1, "set_aside_orders": 0}
 
     def test_a_file_from_an_older_version_still_loads(self, tmp_path: Path):
         # Older files kept the count only in pandas' own metadata, and most

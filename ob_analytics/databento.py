@@ -130,6 +130,7 @@ from ob_analytics.protocols import (
 from ob_analytics.schemas import (
     MAYBE_BAD_BOOK_ATTR,
     SEQUENCE_COLUMN,
+    SET_ASIDE_ORDERS_ATTR,
     TRADE_DTYPES,
     TRADE_SIDE_DTYPE,
     attach_instrument_identity,
@@ -542,7 +543,8 @@ class DatabentoLoader:
             ``action``, ``direction``, ``event_id``, ``original_number``,
             ``raw_event_type`` (the DBN action letter) and ``raw_size`` (the
             record's own ``size`` field).  ``attrs[MAYBE_BAD_BOOK_ATTR]``
-            holds :attr:`maybe_bad_book_records`.
+            holds :attr:`maybe_bad_book_records`, and
+            ``attrs[SET_ASIDE_ORDERS_ATTR]`` holds :attr:`set_aside_orders`.
         """
         logger.info("DatabentoLoader: reading {}", path)
         book = _BookFilter(self._settings)
@@ -626,7 +628,9 @@ class DatabentoLoader:
         flagged = _count_maybe_bad_book(raw)
         reading.flagged += flagged
 
+        set_aside_before = reading.set_aside_orders
         work = self._to_working_frame(raw, reading, first=reading.records + 1)
+        set_aside = reading.set_aside_orders - set_aside_before
         first_event = reading.events
         events, records = _book_events_and_fills(work, reading, last=last)
         reading.records += len(raw)
@@ -666,6 +670,7 @@ class DatabentoLoader:
         )
         events = cast_events(events)
         events.attrs[MAYBE_BAD_BOOK_ATTR] = flagged
+        events.attrs[SET_ASIDE_ORDERS_ATTR] = set_aside
         return events, records
 
     def _to_working_frame(

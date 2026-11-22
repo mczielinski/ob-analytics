@@ -1791,6 +1791,13 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   the book that moves to such a price raises `ConfigError` and names the same
   setting. Every other off-grid book price is still refused. Only the
   Databento loader does this; the other loaders are unchanged.
+- **The audit reports the orders set aside under $1** (#562). The count
+  was only in a warning while the file loaded and on the loader. It is now
+  on `events.attrs` under `SET_ASIDE_ORDERS_ATTR` (`"set_aside_orders"`),
+  saved with the run and read back, and reported by `data_quality_summary`
+  as `set_aside_orders` and by `audit` as the `set_aside_orders` warning,
+  which names `PipelineConfig(tick_size=0.0001, price_decimals=4)`. A
+  source that cannot set orders aside reports the check as not checked.
 - **The matplotlib queue-position face draws in about 1 s, not 25 s** (#539).
   It drew one line for each order. It now draws one line collection for
   each fate, with one path for each order. The paths keep the line caps and

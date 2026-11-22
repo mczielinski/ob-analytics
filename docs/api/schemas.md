@@ -52,6 +52,8 @@ describes the same tables.
 
 ::: ob_analytics.schemas.MAYBE_BAD_BOOK_ATTR
 
+::: ob_analytics.schemas.SET_ASIDE_ORDERS_ATTR
+
 ::: ob_analytics.schemas.HIDDEN_ORDER_ID
 
 ## Instrument columns

@@ -112,7 +112,9 @@ $0.0001 from before the open to the close.
 - **An order that enters the book under $1.00 at a price off the tick grid
   is set aside.** The loader leaves out every record of the order until the
   next clear and warns once with the number of orders and records it left
-  out. `DatabentoLoader.set_aside_orders` holds the count.
+  out. `DatabentoLoader.set_aside_orders` holds the count, and so does
+  `events.attrs["set_aside_orders"]`, which a saved run keeps. The
+  [audit](audit.md) reports it as the `set_aside_orders` warning.
 - **An order already on the book that moves to such a price raises
   `ConfigError`.** Leaving out its later records would leave it resting at
   its old price.
