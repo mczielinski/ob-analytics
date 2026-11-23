@@ -96,7 +96,9 @@ each size run in its own process, peak RSS via `getrusage`. The slope is about
 0.8 GiB per 1M events, and a linear extrapolation gives about 4.2 GiB at 5M
 events. Slightly conservative — tiling adds some transient overhead. About
 110 MiB of each figure is numba and the compiled depth replay, a fixed cost
-that does not grow with the event count. The seconds depend on the machine;
+that does not grow with the event count. That figure is with numba's disk
+cache already written. A process that compiles the loop itself, as the first
+one in a new environment does, peaks about 60 MiB higher. The seconds depend on the machine;
 the memory does much less.)*
 
 ### Where the time goes
@@ -133,7 +135,9 @@ looking at a second dataframe library again. This day has 3.7M events, so it
 does not settle that test.
 
 `bench-baseline.json`, which CI compares against on every pull request, was
-recorded on the ubuntu-24.04 GitHub runner. Read it for CI's own numbers.
+recorded on the ubuntu-24.04 GitHub runner. Read it for CI's own numbers. A
+fresh runner has no numba cache, so every CI run compiles the loop, and its
+peak memory is 160 to 210 MiB above a run without numba.
 
 **Comfortable ceiling ≈ 5M events (about 4–5 GiB)** on a typical 16 GB machine — i.e.
 session-scale data, a few hours of a single liquid instrument. For larger inputs

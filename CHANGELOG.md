@@ -1236,9 +1236,11 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   the sample, and from 61.9 s to 6.3 s on the AAPL day, where a whole run
   fell from 90 s to 35 s. numba is now a required dependency
   (`adr/0003-numba-for-the-rebuild-loops.md`). It adds about
-  110 MiB to a process's memory, and the first call in a new environment
-  compiles the loop, which takes a few seconds; numba caches the result on
-  disk for later processes. `PriceLevelBook`'s array attributes are now
+  110 MiB to a process's memory. The first call in a new environment
+  compiles the loop, which takes a few seconds and about 60 MiB more at its
+  peak; numba caches the result on disk for later processes.
+  `bench-baseline.json` is recorded again on the CI runner, where every run
+  compiles and peak memory rises by 160 to 210 MiB per stage. `PriceLevelBook`'s array attributes are now
   views of the book's storage, so a later `update` can change them.
   `scripts/bench_scale.py` runs the loop once before it times anything, so
   no stage's seconds include the compile.
