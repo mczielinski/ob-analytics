@@ -91,6 +91,7 @@ LAYER_OF: dict[str, str] = {
     "ob_analytics._demos": API,
     "ob_analytics.pipeline": API,
     "ob_analytics._windows": API,
+    "ob_analytics.scan": API,
     "ob_analytics.visualization.__init__": API,
     "ob_analytics.visualization.prepare": API,
     "ob_analytics.visualization.gallery": API,

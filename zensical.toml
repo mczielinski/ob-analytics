@@ -83,6 +83,7 @@ nav = [
     { "Trade Signs" = "api/trade_sign.md" },
     { "Depth" = "api/depth.md" },
     { "Data I/O" = "api/data.md" },
+    { "Reading saved runs in parts" = "api/scan.md" },
     { "Backtester export" = "api/interop.md" },
     { "Visualization" = "api/visualization.md" },
     { "Gallery" = "api/gallery.md" },

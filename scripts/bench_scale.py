@@ -18,6 +18,7 @@ by the reference seconds, against the same ratio in the baseline.
     uv run python scripts/bench_scale.py                    # check the baseline
     uv run python scripts/bench_scale.py --update-baseline  # record a new one
     uv run python scripts/bench_scale.py --envelope         # the scale table
+    uv run python scripts/bench_scale.py --out-of-core      # reading saved runs in parts
 
 Per stage, not per run: #138 should not start without proof that the rebuild
 loop, and not file reading or the depth kernels, is the slow part.
@@ -34,6 +35,14 @@ sample tiled to several sizes, each size in its own subprocess, peak RSS from
 ``getrusage``. That is what the "Scale envelope" table in ``ARCHITECTURE.md`` is
 measured with, and it answers a different question — how memory grows with the
 event count — so it is not part of the CI check.
+
+``--out-of-core`` measures the other half of that table: reading a saved run in
+parts with :mod:`ob_analytics.scan`. It saves the bundled sample's run once,
+tiles the saved ``depth`` and ``depth_summary`` files to several sizes one row
+group at a time (so building them needs no memory), and in a subprocess per
+size runs :func:`~ob_analytics.scan.aggregate_by_time` and
+:func:`~ob_analytics.scan.summarize_depth_file` over them. The largest size is
+larger, as a pandas frame, than the memory of a 16 GB machine.
 """
 
 from __future__ import annotations
@@ -43,8 +52,10 @@ import ctypes
 import json
 import platform
 import resource
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -53,13 +64,17 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from ob_analytics import pipeline, sample_csv_path
 from ob_analytics.analytics import set_order_types
 from ob_analytics.bitstamp import BitstampLoader, BitstampTradeReader
 from ob_analytics.config import PipelineConfig
+from ob_analytics.data import ROW_GROUP_ROWS, save_data
 from ob_analytics.depth import price_level_volume, summarize_depth
 from ob_analytics.queue import queue_positions
+from ob_analytics.scan import aggregate_by_time, summarize_depth_file
 from ob_analytics.synth import generate_session
 
 BASELINE = Path(__file__).resolve().parent.parent / "bench-baseline.json"
@@ -67,6 +82,18 @@ BASELINE = Path(__file__).resolve().parent.parent / "bench-baseline.json"
 
 MULTIPLES = [1, 2, 3, 4]
 """Tiling multiples of the bundled sample, for ``--envelope`` only."""
+
+AGGREGATE_MULTIPLES = [1, 16, 64, 160]
+"""Tiling multiples of the saved ``depth_summary``, for ``--out-of-core``.
+
+At 160 the table is about 50M rows: about 17 GiB as a pandas frame, and about
+1 GB on disk."""
+
+SUMMARIZE_MULTIPLES = [1, 4, 16]
+"""Tiling multiples of the saved ``depth``, for ``--out-of-core``.
+
+Smaller than :data:`AGGREGATE_MULTIPLES` because the summary replay takes about
+12 s per copy of the sample however it is read."""
 
 SYNTH_DURATION = 18_000.0
 """Seconds of synthetic session in the ``synth`` run: about 315k events.
@@ -694,6 +721,120 @@ def envelope() -> None:
         )
 
 
+# ──── reading saved runs in parts ───────────────────────────────────────
+
+
+def _save_sample_run(folder: Path) -> None:
+    """Run the bundled sample and save it to *folder*."""
+    save_data(pipeline.Pipeline().run(sample_csv_path()), folder)
+
+
+def _tile_file(source: Path, dest: Path, mult: int) -> int:
+    """Write *source* *mult* times over to *dest*, one row group at a time.
+
+    Each copy is moved later in time by the span of the source, and its
+    ``event_id`` by the largest id, so the result reads as one long run in
+    time order. Returns the number of rows written.
+    """
+    file = pq.ParquetFile(source)
+    times = pd.read_parquet(source, columns=["timestamp", "event_id"])
+    span = np.timedelta64(times["timestamp"].max() - times["timestamp"].min())
+    span += np.timedelta64(1, "s")
+    id_step = int(times["event_id"].max()) + 1
+    del times
+    schema = file.schema_arrow
+    time_at = schema.get_field_index("timestamp")
+    id_at = schema.get_field_index("event_id")
+    rows = 0
+    with pq.ParquetWriter(dest, file.schema_arrow) as writer:
+        for k in range(mult):
+            for batch in file.iter_batches(batch_size=ROW_GROUP_ROWS):
+                table = pa.Table.from_batches([batch])
+                shifted = table.column(time_at).to_numpy() + k * span
+                ids = table.column(id_at).to_numpy() + k * id_step
+                table = table.set_column(
+                    time_at,
+                    schema.field(time_at),
+                    pa.array(shifted, schema.field(time_at).type),
+                ).set_column(
+                    id_at, schema.field(id_at), pa.array(ids, schema.field(id_at).type)
+                )
+                writer.write_table(table, row_group_size=ROW_GROUP_ROWS)
+                rows += table.num_rows
+    return rows
+
+
+def _out_of_core_child(kind: str, folder: Path) -> None:
+    """One measured call in a fresh process: rows, peak MiB, seconds."""
+    t0 = time.perf_counter()
+    if kind == "aggregate":
+        out = aggregate_by_time(folder, "depth_summary", "1min", "mean")
+        assert len(out) > 0
+        rows = pq.ParquetFile(folder / "depth_summary.parquet").metadata.num_rows
+    else:
+        written = summarize_depth_file(folder, folder / "summary")
+        rows = pq.ParquetFile(written).metadata.num_rows
+    wall = time.perf_counter() - t0
+    print(f"{rows}\t{_peak_rss_mib():.0f}\t{wall:.1f}")
+
+
+def _measure_child(kind: str, folder: Path) -> tuple[int, int, float] | None:
+    proc = subprocess.run(
+        [sys.executable, __file__, "--out-of-core-child", kind, str(folder)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        print(f"  FAILED (rc={proc.returncode})\n{proc.stderr[-400:]}")
+        return None
+    rows, rss, wall = proc.stdout.strip().split("\t")
+    return int(rows), int(rss), float(wall)
+
+
+def out_of_core(work: Path | None = None) -> None:
+    """Print the out-of-core table behind ``ARCHITECTURE.md``."""
+    with tempfile.TemporaryDirectory(dir=work) as temporary:
+        root = Path(temporary)
+        base = root / "base"
+        _save_sample_run(base)
+        # The in-memory size of one copy, to state each file's size as pandas.
+        one_copy = pd.read_parquet(base / "depth_summary.parquet")
+        bytes_per_row = one_copy.memory_usage(deep=True).sum() / len(one_copy)
+        del one_copy
+        for kind, table, multiples in (
+            ("aggregate", "depth_summary", AGGREGATE_MULTIPLES),
+            ("summarize", "depth", SUMMARIZE_MULTIPLES),
+        ):
+            print(f"\n{kind}: {table}")
+            print(
+                f"{'rows':>12}  {'on disk (MiB)':>13}  {'as pandas (GiB)':>15}  "
+                f"{'peak RSS (MiB)':>14}  {'seconds':>8}"
+            )
+            for mult in multiples:
+                folder = root / f"{kind}-{mult}"
+                folder.mkdir()
+                path = folder / f"{table}.parquet"
+                rows = _tile_file(base / f"{table}.parquet", path, mult)
+                disk = path.stat().st_size / 1024**2
+                measured = _measure_child(kind, folder)
+                shutil.rmtree(folder)
+                if measured is None:
+                    continue
+                _, rss, wall = measured
+                # Only the depth_summary copy was sized; the depth table's
+                # pandas size is left blank rather than guessed.
+                pandas_gib = (
+                    f"{rows * bytes_per_row / 1024**3:.1f}"
+                    if kind == "aggregate"
+                    else "-"
+                )
+                print(
+                    f"{rows:>12,}  {disk:>13,.0f}  {pandas_gib:>15}  "
+                    f"{rss:>14,}  {wall:>8.1f}"
+                )
+
+
 # ──── the command ───────────────────────────────────────────────────────
 
 
@@ -728,7 +869,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print the scale-envelope table instead (see the module docstring)",
     )
+    parser.add_argument(
+        "--out-of-core",
+        action="store_true",
+        help="print the table for reading saved runs in parts (see the module docstring)",
+    )
+    parser.add_argument(
+        "--work",
+        type=Path,
+        help="the folder --out-of-core writes its tiled files in (default: the system's)",
+    )
     parser.add_argument("--mult", type=int, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--out-of-core-child",
+        nargs=2,
+        metavar=("KIND", "FOLDER"),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--measure-run", help=argparse.SUPPRESS)
     parser.add_argument("--synth-duration", type=float, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -751,6 +908,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.envelope:
         envelope()
+        return 0
+    if args.out_of_core_child is not None:  # one child process of --out-of-core
+        kind, folder = args.out_of_core_child
+        _out_of_core_child(kind, Path(folder))
+        return 0
+    if args.out_of_core:
+        out_of_core(args.work)
         return 0
 
     runs = [name for name in args.runs.split(",") if name]
