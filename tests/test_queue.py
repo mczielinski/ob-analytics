@@ -284,12 +284,149 @@ class TestLiveLevels:
             assert levels.best() == expected
 
 
-class TestArrivalQueue:
-    """A level's rank and volume ahead match a walk of the queue (#520).
+def _reference_positions(events, *, touch_only: bool) -> dict[str, np.ndarray]:
+    """Queue positions from a plain Python model of the FIFO rules.
 
-    ``emit`` used to walk each order's level to find these; the Fenwick trees
-    must report the same numbers after every kind of change to the queue.
+    Kept as simple as it can be: a dictionary per level in arrival order,
+    walked from the front, and the touch from ``max`` or ``min`` over the
+    non-empty levels.  Ages are truncated to whole microseconds, with the
+    whole seconds added after the division, as the golden tests pin them.
+    The compiled engine must give the same arrays, bit for bit.
     """
+    from ob_analytics.engine import Action
+
+    visible = events.visible()
+    # Prices and sizes are ints or floats, as the stream carries them.
+    queues: dict[tuple[int, float], dict[int, float]] = {}
+    level_of: dict[int, tuple[int, float]] = {}
+    placed: dict[int, int] = {}
+    out: dict[str, list] = {
+        name: []
+        for name in (
+            "row",
+            "price",
+            "action",
+            "rank",
+            "queue_len",
+            "ahead_volume",
+            "remaining",
+            "age_s",
+        )
+    }
+
+    def emit(row: int, when: int, oid: int, level, action: int) -> None:
+        direction, price = level
+        if touch_only:
+            live = [p for (d, p), q in queues.items() if d == direction and q]
+            if price != (max(live) if direction == 0 else min(live)):
+                return
+        queue = queues[level]
+        rank = 1
+        ahead: float = 0
+        for other, size in queue.items():
+            if other == oid:
+                break
+            rank += 1
+            ahead += size
+        seconds, remainder = divmod(when - placed[oid], 1_000_000_000)
+        age = seconds + (remainder // 1000) / 1e6
+        for name, value in zip(
+            out,
+            (row, price, action, rank, len(queue), ahead, queue[oid], age),
+            strict=True,
+        ):
+            out[name].append(value)
+
+    def leave(oid: int, level) -> None:
+        del level_of[oid]
+        del queues[level][oid]
+
+    def join(oid: int, level, volume) -> None:
+        level_of[oid] = level
+        queues.setdefault(level, {})[oid] = volume
+
+    for row in visible.tolist():
+        oid = int(events.order_id[row])
+        when = int(events.timestamp[row])
+        price = events.rests_at()[row].item()
+        volume = events.volume[row].item()
+        action = int(events.action[row])
+        level = level_of.get(oid)
+        if action == Action.CREATED:
+            if level is not None:
+                emit(row, when, oid, level, Action.DELETED)
+                leave(oid, level)
+            placed[oid] = when
+            new_level = (int(events.direction[row]), price)
+            join(oid, new_level, volume)
+            emit(row, when, oid, new_level, Action.CREATED)
+        elif level is None:
+            continue
+        elif action == Action.DELETED or volume <= 0:
+            emit(row, when, oid, level, Action.DELETED)
+            leave(oid, level)
+        elif (level[0], price) != level:
+            emit(row, when, oid, level, Action.DELETED)
+            leave(oid, level)
+            join(oid, (level[0], price), volume)
+            emit(row, when, oid, (level[0], price), Action.CREATED)
+        else:
+            queues[level][oid] = volume
+            emit(row, when, oid, level, Action.CHANGED)
+
+    return {
+        "row": np.array(out["row"], dtype=np.int64),
+        "price": np.asarray(out["price"], dtype=events.rests_at().dtype),
+        "action": np.array(out["action"], dtype=np.int8),
+        "rank": np.array(out["rank"], dtype=np.int64),
+        "queue_len": np.array(out["queue_len"], dtype=np.int64),
+        "ahead_volume": np.asarray(out["ahead_volume"], dtype=events.volume.dtype),
+        "remaining": np.asarray(out["remaining"], dtype=events.volume.dtype),
+        "age_s": np.array(out["age_s"], dtype=np.float64),
+    }
+
+
+def _random_stream(seed: int, n: int):
+    """A random event stream that reaches every rule of the queue engine.
+
+    Orders are placed again while queued, moved, resized, resized to zero,
+    deleted, and changed after they are gone.  Times tie and run backwards,
+    so some ages are negative.  Some streams have float sizes, float prices,
+    hidden and market orders, or resting prices that differ from the row's.
+    """
+    from ob_analytics.engine import OrderEvents
+
+    rng = np.random.default_rng(seed)
+    order_id = rng.integers(1, max(n // 4, 2) + 1, n).astype(np.int64)
+    timestamp = rng.integers(0, 10**12, n).astype(np.int64)
+    timestamp[: n * 4 // 5] = np.sort(timestamp[: n * 4 // 5])
+    price = rng.integers(95, 106, n).astype(np.int64)
+    if seed % 5 == 2:
+        price = price / 7.0
+    volume = rng.integers(0, 50, n).astype(np.int64)
+    if seed % 3 == 1:
+        volume = rng.random(n) * rng.choice([1e-8, 1.0, 3e5], n)
+        volume[rng.random(n) < 0.1] = 0.0
+    extra = {}
+    if seed % 2:
+        extra["is_hidden"] = rng.random(n) < 0.05
+    if seed % 4 < 2:
+        extra["is_market"] = rng.random(n) < 0.05
+    if seed % 7 < 3:
+        extra["resting_price"] = np.where(rng.random(n) < 0.8, price, price + 1)
+    return OrderEvents(
+        order_id=order_id,
+        timestamp=timestamp,
+        price=price,
+        volume=volume,
+        direction=rng.integers(0, 2, n).astype(np.int8),
+        action=rng.choice([0, 0, 1, 1, 2], n).astype(np.int8),
+        **extra,
+    )
+
+
+class TestCompiledReplay:
+    """The compiled queue engine gives what a plain model of the rules gives."""
 
     @staticmethod
     def _walk(queue: dict[int, float], oid: int) -> tuple[int, float, float]:
@@ -301,88 +438,62 @@ class TestArrivalQueue:
             ahead += size
         raise KeyError(oid)
 
-    @pytest.mark.parametrize("tree_from", [2, 32])
-    def test_adds_fills_cancels(
-        self, tree_from: int, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("touch_only", [True, False])
+    @pytest.mark.parametrize("seed", range(60))
+    def test_matches_the_plain_model_bit_for_bit(
+        self, seed: int, touch_only: bool
     ) -> None:
-        from ob_analytics.engine import _queue
+        from ob_analytics import engine
 
-        monkeypatch.setattr(_queue, "_TREE_FROM", tree_from)
-        q = _queue._ArrivalQueue(exact=True)
-        for oid, size in [(1, 5), (2, 7), (3, 11), (4, 13)]:
-            q.append(oid, size)
-        assert [q.position(oid) for oid in (1, 2, 3, 4)] == [
-            (1, 0, 5),
-            (2, 5, 7),
-            (3, 12, 11),
-            (4, 23, 13),
-        ]
-        q.resize(2, 3)  # a partial fill keeps the place
-        assert q.position(2) == (2, 5, 3)
-        assert q.position(4) == (4, 19, 13)
-        q.remove(1)  # the front order leaves
-        assert q.position(2) == (1, 0, 3)
-        assert q.position(4) == (3, 14, 13)
-        q.remove(3)  # a cancel in the middle
-        assert q.position(4) == (2, 3, 13)
-        q.append(1, 2)  # back again: to the back of the queue
-        assert q.position(1) == (3, 16, 2)
-        assert len(q) == 3
+        events = _random_stream(seed, [0, 1, 7, 60, 400][seed % 5])
+        got = engine.queue_positions(events, touch_only=touch_only)
+        expected = _reference_positions(events, touch_only=touch_only)
+        for name, want in expected.items():
+            have = getattr(got, name)
+            assert have.dtype == want.dtype, name
+            if want.dtype.kind == "f":
+                # Compare the bits, so -0.0 and NaN are checked too.
+                have, want = have.view(np.int64), want.view(np.int64)
+            np.testing.assert_array_equal(have, want, err_msg=name)
 
-    def test_long_queue_matches_a_walk(self) -> None:
-        from ob_analytics.engine import _queue
+    @pytest.mark.parametrize(
+        ("column", "value", "message"),
+        [
+            ("direction", 2, "BID or ASK"),
+            ("timestamp", np.iinfo(np.int64).min, "timestamp"),
+            ("resting_price", np.nan, "resting price"),
+        ],
+    )
+    def test_rejects_rows_it_cannot_queue(
+        self, column: str, value: float, message: str
+    ) -> None:
+        # The compiled loop does not check its array bounds, so a bad code has
+        # to be stopped before it runs.
+        import dataclasses
 
-        q = _queue._ArrivalQueue(exact=True)
-        reference: dict[int, float] = {}
-        rng = np.random.default_rng(11)
-        next_id = 0
-        # Grow past the length that builds the trees, churn long enough to run
-        # out of slots several times, then drain below the length that drops
-        # them.
-        step = 0
-        while step < 25_000 or reference:
-            step += 1
-            draining = step >= 25_000
-            grow = not draining and (len(reference) < 200 or rng.random() < 0.5)
-            if grow:
-                next_id += 1
-                size = int(rng.integers(1, 1_000_000))
-                q.append(next_id, size)
-                reference[next_id] = size
-            elif reference:
-                oid = list(reference)[int(rng.integers(len(reference)))]
-                if not draining and rng.random() < 0.4:
-                    size = int(rng.integers(1, int(reference[oid]) + 1))
-                    q.resize(oid, size)
-                    reference[oid] = size
-                else:
-                    q.remove(oid)
-                    del reference[oid]
-            if reference and step % 7 == 0:
-                for oid in list(reference)[:: max(1, len(reference) // 5)]:
-                    assert q.position(oid) == self._walk(reference, oid)
-            assert len(q) == len(reference)
-            if step == 25_000:
-                assert q._slot is not None, "the long queue should use the trees"
-        assert not reference and len(q) == 0
-        assert q._slot is None, "the drained queue should walk again"
+        from ob_analytics import engine
 
-    def test_float_sizes_are_walked(self) -> None:
-        from ob_analytics.engine import _queue
+        events = _random_stream(2, 60)  # float prices, with resting prices
+        bad = np.array(getattr(events, column))
+        bad[events.visible()[0]] = value
+        with pytest.raises(ValueError, match=message):
+            engine.queue_positions(dataclasses.replace(events, **{column: bad}))
 
-        q = _queue._ArrivalQueue(exact=False)
-        reference: dict[int, float] = {}
-        for oid in range(100):
-            q.append(oid, 0.1 * (oid + 1))
-            reference[oid] = 0.1 * (oid + 1)
-        for oid in range(0, 100, 3):
-            q.remove(oid)
-            del reference[oid]
-        # Summed in queue order, so the front order has exactly nothing ahead.
-        front = next(iter(reference))
-        assert q.position(front)[:2] == (1, 0)
-        for oid in reference:
-            assert q.position(oid) == self._walk(reference, oid)
+    def test_compiles_without_the_disk_cache_when_it_cannot_write_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # numba raises RuntimeError at decoration when no cache folder can be
+        # written, as in a read-only install with a read-only home folder.
+        from ob_analytics.engine import _queue_replay
+
+        def njit(*args, **kwargs):
+            if kwargs.get("cache"):
+                raise RuntimeError("cannot cache function: no locator available")
+            (func,) = args
+            return func
+
+        monkeypatch.setattr(_queue_replay, "njit", njit)
+        assert _queue_replay._compiled(lambda x: x + 1)(1) == 2
 
     @pytest.mark.parametrize("volume_dtype", ["int64", "float64"])
     def test_queue_positions_on_a_long_level(self, volume_dtype: str) -> None:

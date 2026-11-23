@@ -31,8 +31,9 @@ from ob_analytics.engine import Action, Direction, OrderEvents, Outcome
 _ENGINE_DIR = pathlib.Path(engine.__file__).parent
 _PACKAGE_DIR = _ENGINE_DIR.parent
 
-# Everything the engine is allowed to import.  numpy is the one third-party
-# dependency; the rest is the standard library plus the engine's own modules.
+# Everything the engine is allowed to import.  numpy is its one third-party
+# dependency for arrays, and numba compiles its rebuild loops (ADR 0003); the
+# rest is the standard library plus the engine's own modules.
 _ALLOWED_ROOTS = frozenset(
     {
         "__future__",
@@ -41,6 +42,7 @@ _ALLOWED_ROOTS = frozenset(
         "enum",
         "heapq",
         "math",
+        "numba",
         "numpy",
         "typing",
     }

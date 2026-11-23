@@ -24,11 +24,12 @@ loops, and not file reading or analytics, are the slow part. There are two:
 ``depth_metrics`` replays the L2 book one event at a time, and
 ``queue_positions`` walks the per-order queues.
 
-Compile time is not counted. The depth replay is a loop that numba compiles
-to machine code the first time it runs in a process, or loads from numba's
-cache on disk. Each process runs it once on a two-row frame
-(:func:`warm_up`) before it times anything, so no stage's seconds include the
-compile, and every stage's memory includes the compiler and the compiled code.
+Compile time is not counted. The depth replay and the queue engine are loops
+that numba compiles to machine code the first time they run in a process, or
+loads from numba's cache on disk. Each process runs both once on a two-row
+frame (:func:`warm_up`) before it times anything, so no stage's seconds include
+the compile, and every stage's memory includes the compiler and the compiled
+code.
 
 Memory is the process high-water mark read after each stage, not the allocation
 each stage makes: ``tracemalloc`` would attribute it properly but slows the code
@@ -170,7 +171,7 @@ The middle ones are the pipeline's own (``ob_analytics.pipeline.STAGES``), run
 as ``Pipeline.run`` runs them.  ``load`` covers reading events and trades off
 the source.  ``queue_positions`` is the public ``ob_analytics.queue`` call: the
 sort into time order and the engine's FIFO reconstruction.  It is not part of
-``Pipeline.run``, but it holds the stateful loop that #138 would compile, so it
+``Pipeline.run``, but it holds one of the two loops that #138 compiled, so it
 needs a number of its own.
 """
 
@@ -257,20 +258,28 @@ def _return_freed_memory() -> None:
 
 
 def warm_up() -> None:
-    """Compile the depth replay, or load it from numba's cache, before timing.
+    """Compile the depth replay and the queue engine, or load them from cache.
 
-    A two-row depth frame with the dtypes the pipeline produces (integer tick
-    prices, integer lot sizes) gives the compiled loop the same argument
-    types as a real run, so the real run reuses this compile.
+    Two-row frames with the dtypes the pipeline produces (integer tick prices,
+    integer lot sizes) give the compiled loops the same argument types as a
+    real run, so the real run reuses these compiles.
     """
-    summarize_depth(
-        pd.DataFrame(
-            {
-                "timestamp": pd.to_datetime([0, 1], utc=True),
-                "price": np.array([100, 101], dtype=np.int64),
-                "volume": np.array([1, 1], dtype=np.int64),
-                "direction": ["bid", "ask"],
-            }
+    two_rows = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime([0, 1], utc=True),
+            "price": np.array([100, 101], dtype=np.int64),
+            "volume": np.array([1, 1], dtype=np.int64),
+            "direction": ["bid", "ask"],
+        }
+    )
+    summarize_depth(two_rows)
+    queue_positions(
+        two_rows.assign(
+            event_id=[1, 2],
+            id=[1, 2],
+            action="created",
+            fill=np.zeros(2, dtype=np.int64),
+            type="resting-limit",
         )
     )
 

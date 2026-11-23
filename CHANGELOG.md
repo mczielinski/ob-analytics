@@ -1244,6 +1244,22 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   views of the book's storage, so a later `update` can change them.
   `scripts/bench_scale.py` runs the loop once before it times anything, so
   no stage's seconds include the compile.
+- **The queue engine is compiled with numba** (#138). `queue_positions`,
+  in `ob_analytics.queue` and in the engine, now rebuilds the FIFO queues in
+  a loop that numba compiles, in place of the dictionaries, heaps and
+  Fenwick trees it walked in Python. The outputs are the same, bit for bit:
+  on the bundled sample, the synthetic session, the AAPL day, and random
+  event streams checked against a plain model of the rules. On one desktop,
+  the `queue_positions` stage fell from 0.70 s to 0.12 s on the sample, from
+  0.82 s to 0.11 s on the synthetic session, and from 7.0 s to 1.1 s on the
+  AAPL day, where a whole run fell from 35 s to 30 s. Peak memory did not
+  rise. The compiled loop is part of the engine, which may now import numba
+  as well as numpy (ADR 0003). The first call in
+  a new environment compiles it, which takes about four seconds.
+  `scripts/bench_scale.py` compiles it before it times anything. The engine's
+  `queue_positions` now raises `ValueError` for a visible row with a side
+  code other than bid or ask, a `NAT_NS` time or a NaN resting price, which
+  the compiled loop cannot queue.
 - **One contract per table** (#499). `ob_analytics.schemas.TABLES` holds a
   contract for every table the package returns: events, trades, depth,
   depth_summary, order lifecycles, queue positions, book snapshots, bars and

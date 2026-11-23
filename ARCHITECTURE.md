@@ -95,10 +95,11 @@ on one Linux x86_64 desktop: the bundled ~314k-event sample tiled to each size,
 each size run in its own process, peak RSS via `getrusage`. The slope is about
 0.8 GiB per 1M events, and a linear extrapolation gives about 4.2 GiB at 5M
 events. Slightly conservative — tiling adds some transient overhead. About
-110 MiB of each figure is numba and the compiled depth replay, a fixed cost
-that does not grow with the event count. That figure is with numba's disk
-cache already written. A process that compiles the loop itself, as the first
-one in a new environment does, peaks about 60 MiB higher. The seconds depend on the machine;
+110 MiB of each figure is numba and the compiled loops, a fixed cost that
+does not grow with the event count. Compiling the queue engine as well did not
+raise the peak. That figure is with numba's disk cache already written. A
+process that compiles the loops itself, as the first one in a new environment
+does, peaks about 60 MiB higher. The seconds depend on the machine;
 the memory does much less.)*
 
 ### Where the time goes
@@ -107,36 +108,38 @@ Per stage, measured on one desktop on 2026-11-23, before and after in the same
 session, with `scripts/bench_scale.py` (the fastest of three passes) for the
 bundled 314k-event sample, and with one pass of `bench_scale.measure_run` for a
 full day of Databento AAPL MBO data (XNAS.ITCH, 2026-11-10, 3.7M events).
-"Before" is the depth replay as numpy calls driven from Python; "after" is the
-same replay compiled with numba
+"Before" has the depth replay compiled and the queue engine in Python; "after"
+has both loops compiled with numba
 ([ADR 0003](https://github.com/mczielinski/ob-analytics/blob/main/adr/0003-numba-for-the-rebuild-loops.md)).
 The shape holds on other machines; the seconds do not.
 
 | stage | sample before | sample after | AAPL day before | AAPL day after |
 |-------|--------------:|-------------:|----------------:|---------------:|
-| `load` | 0.43 | 0.45 | 14.87 | 15.11 |
-| `set_order_types` | 0.13 | 0.14 | 2.65 | 2.63 |
-| `price_level_volume` | 0.15 | 0.15 | 2.48 | 2.50 |
-| `summarize_depth` | 7.15 | 0.37 | 61.94 | 6.31 |
-| `order_aggressiveness` | 0.10 | 0.10 | 1.30 | 1.28 |
-| `queue_positions` | 0.64 | 0.65 | 6.57 | 6.69 |
-| total | 8.60 | 1.86 | 89.82 | 34.52 |
+| `load` | 0.45 | 0.44 | 14.76 | 15.02 |
+| `set_order_types` | 0.14 | 0.14 | 2.78 | 2.85 |
+| `price_level_volume` | 0.16 | 0.15 | 2.70 | 2.71 |
+| `summarize_depth` | 0.38 | 0.36 | 6.85 | 6.60 |
+| `order_aggressiveness` | 0.11 | 0.10 | 1.29 | 1.30 |
+| `queue_positions` | 0.70 | 0.12 | 7.02 | 1.14 |
+| total | 1.94 | 1.31 | 35.40 | 29.62 |
 
-Compiling the depth replay made it about 19 times faster on the sample and 10
-times faster on the AAPL day, with the same output, value for value. It is now
-20% of a run on the sample and 18% on the AAPL day. The queue loop is the
-other stateful loop, at 35% and 19%, and is the next one to compile. On the
-AAPL day, reading the DBN file is now the largest stage, at 44%.
+Compiling the queue engine made `queue_positions` about 6 times faster on the
+sample and on the AAPL day, with the same output, bit for bit. It is now 9% of
+a run on the sample and 4% on the AAPL day. Before either loop was compiled,
+the depth replay took 7.15 s of the sample and 61.9 s of the AAPL day, and a
+whole run took 8.6 s and 90 s. The depth replay is now the largest stateful
+stage, at 27% of the sample and 22% of the AAPL day. On the AAPL day, reading
+the DBN file is the largest stage, at 51%.
 
 Reading and the frame stages (`load`, `set_order_types`, `price_level_volume`
-and `order_aggressiveness`) are now 62% of the AAPL day. [ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md)
+and `order_aggressiveness`) are now 74% of the AAPL day. [ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md)
 names 30% of a run at 5M events or more as one of its two conditions for
 looking at a second dataframe library again. This day has 3.7M events, so it
 does not settle that test.
 
 `bench-baseline.json`, which CI compares against on every pull request, was
 recorded on the ubuntu-24.04 GitHub runner. Read it for CI's own numbers. A
-fresh runner has no numba cache, so every CI run compiles the loop, and its
+fresh runner has no numba cache, so every CI run compiles the loops, and its
 peak memory is 160 to 210 MiB above a run without numba.
 
 **Comfortable ceiling ≈ 5M events (about 4–5 GiB)** on a typical 16 GB machine — i.e.
@@ -382,7 +385,8 @@ ob_analytics/
 │   ├── _events.py        # OrderEvents -- the shared schema as numpy columns
 │   ├── _book.py          # point-in-time rebuild + crossed-book eviction
 │   ├── _lifecycles.py    # placement -> outcome, one row per order
-│   └── _queue.py         # FIFO queue position and touch composition
+│   ├── _queue.py         # FIFO queue position and touch composition
+│   └── _queue_replay.py  # Compiled (numba) loop of the FIFO queue reconstruction
 ├── _engine_frames.py     # pandas <-> engine arrays (the only place the two are converted)
 ├── book.py               # frame faces of the engine: order_book, order_lifecycles
 ├── analytics.py          # order_aggressiveness, trade_impacts, maker_resting_times, cancelled_orders, set_order_types
