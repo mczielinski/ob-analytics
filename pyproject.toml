@@ -28,6 +28,7 @@ dependencies = [
     "pydantic>=2.13.4,<3",
     "pyarrow>=24.0.0",
     "loguru>=0.7.3",
+    "numba>=0.68.1",
 ]
 
 [project.optional-dependencies]
@@ -122,12 +123,10 @@ dev = [
 # of ``dev``: the writers in ob_analytics.interop need neither engine present,
 # so only the parity tests pay for these, and CI can leave them out.
 backtest-engines = [
+    # hftbacktest imports numba in its ``__init__`` but lists it only as an
+    # optional extra.  numba is one of this package's own dependencies, so
+    # nothing more is needed here.
     "hftbacktest>=2.4",
-    # hftbacktest declares numba as an optional extra but imports it
-    # unconditionally in its ``__init__``, so it has to be named here or
-    # ``import hftbacktest`` fails.  Its own ``numpy`` extra caps numpy below
-    # 2.3 and is therefore not usable here; numba 0.67 takes numpy 2.4.
-    "numba>=0.67",
     # Nautilus publishes no build that takes both Python 3.11 and pandas 3, so
     # on 3.11 it is left out and the Nautilus half of the cross-check skips,
     # the same way the ccxt and cryptofeed tests skip without their extra.

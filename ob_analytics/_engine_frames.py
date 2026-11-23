@@ -31,7 +31,6 @@ from ob_analytics.engine import (
     OrderEvents,
     OrderLifecycles,
     QueuePositions,
-    crossed_prefix_counts,
 )
 from ob_analytics.schemas import HIDDEN_ORDER_ID, QUEUE
 
@@ -206,24 +205,6 @@ def to_order_events(
         is_market=(events["type"] == "market").to_numpy() if market else None,
         is_hidden=(events["id"] == HIDDEN_ORDER_ID).to_numpy(),
     )
-
-
-# ── Uncrossing ────────────────────────────────────────────────────────
-
-
-def crossed_touch_counts(
-    bid_prices: np.ndarray,
-    bid_ts: np.ndarray,
-    ask_prices: np.ndarray,
-    ask_ts: np.ndarray,
-) -> tuple[int, int]:
-    """How many best-end bids and asks to evict to uncross two book sides.
-
-    The depth table's price-level book uncrosses its touch by the engine's
-    rule (:func:`~ob_analytics.engine.crossed_prefix_counts`), so the depth
-    summary and an uncrossed :func:`~ob_analytics.book.order_book` agree.
-    """
-    return crossed_prefix_counts(bid_prices, bid_ts, ask_prices, ask_ts)
 
 
 # ── Results out ───────────────────────────────────────────────────────

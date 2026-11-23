@@ -70,6 +70,7 @@ LAYER_OF: dict[str, str] = {
     "ob_analytics.book": ANALYTICS,
     "ob_analytics.queue": ANALYTICS,
     "ob_analytics.depth": ANALYTICS,
+    "ob_analytics._depth_replay": ANALYTICS,
     "ob_analytics.quality": ANALYTICS,
     "ob_analytics.trade_sign": ANALYTICS,
     "ob_analytics.analytics": ANALYTICS,

@@ -24,6 +24,12 @@ loops, and not file reading or analytics, are the slow part. There are two:
 ``depth_metrics`` replays the L2 book one event at a time, and
 ``queue_positions`` walks the per-order queues.
 
+Compile time is not counted. The depth replay is a loop that numba compiles
+to machine code the first time it runs in a process, or loads from numba's
+cache on disk. Each process runs it once on a two-row frame
+(:func:`warm_up`) before it times anything, so no stage's seconds include the
+compile, and every stage's memory includes the compiler and the compiled code.
+
 Memory is the process high-water mark read after each stage, not the allocation
 each stage makes: ``tracemalloc`` would attribute it properly but slows the code
 it watches several times over, and this runs on every pull request. Before each
@@ -250,6 +256,25 @@ def _return_freed_memory() -> None:
         _MALLOC_TRIM(0)
 
 
+def warm_up() -> None:
+    """Compile the depth replay, or load it from numba's cache, before timing.
+
+    A two-row depth frame with the dtypes the pipeline produces (integer tick
+    prices, integer lot sizes) gives the compiled loop the same argument
+    types as a real run, so the real run reuses this compile.
+    """
+    summarize_depth(
+        pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime([0, 1], utc=True),
+                "price": np.array([100, 101], dtype=np.int64),
+                "volume": np.array([1, 1], dtype=np.int64),
+                "direction": ["bid", "ask"],
+            }
+        )
+    )
+
+
 def reference_workload() -> None:
     """A small fixed piece of work, timed to tell how fast this machine is.
 
@@ -345,6 +370,7 @@ def measure_run(
     if repeats < 1:
         raise ValueError(f"repeats must be at least 1, got {repeats}")
     cfg = config if config is not None else PipelineConfig()
+    warm_up()
     passes = []
     references = []
     for _ in range(repeats):
@@ -659,6 +685,7 @@ def _measure(mult: int) -> None:
     trades = BitstampTradeReader().load(events, Path(path).parent)
     events = _tile(set_order_types(events, trades), mult)
     n = len(events)
+    warm_up()
     t0 = time.perf_counter()
     summary = summarize_depth(price_level_volume(events))
     wall = time.perf_counter() - t0

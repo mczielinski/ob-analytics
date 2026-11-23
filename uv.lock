@@ -2439,6 +2439,7 @@ source = { editable = "." }
 dependencies = [
     { name = "loguru" },
     { name = "matplotlib" },
+    { name = "numba" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
@@ -2476,7 +2477,6 @@ live = [
 backtest-engines = [
     { name = "hftbacktest" },
     { name = "nautilus-trader", marker = "python_full_version >= '3.12'" },
-    { name = "numba" },
 ]
 dev = [
     { name = "bokeh", version = "3.9.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -2510,6 +2510,7 @@ requires-dist = [
     { name = "databento", marker = "extra == 'databento'", specifier = ">=0.86" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.11.0,<4" },
+    { name = "numba", specifier = ">=0.68.1" },
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "pandas", specifier = ">=3.0.3,<4" },
     { name = "plotly", marker = "extra == 'interactive'", specifier = ">=6.8.0" },
@@ -2525,7 +2526,6 @@ provides-extras = ["interactive", "bokeh", "live", "kalshi", "ccxt", "cryptofeed
 backtest-engines = [
     { name = "hftbacktest", specifier = ">=2.4" },
     { name = "nautilus-trader", marker = "python_full_version >= '3.12'", specifier = ">=1.222" },
-    { name = "numba", specifier = ">=0.67" },
 ]
 dev = [
     { name = "bokeh", specifier = ">=3.1" },

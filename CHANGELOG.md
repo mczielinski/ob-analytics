@@ -1227,6 +1227,21 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **The depth replay is compiled with numba** (#138). `summarize_depth`,
+  `DepthSummaryEngine` and `PriceLevelBook` now apply the depth rows in a
+  loop that numba compiles to machine code, in place of a dozen small numpy
+  calls per row. The outputs are the same, value for value: on the bundled
+  sample, the synthetic session and a full Databento AAPL day of 3.7 million
+  events. On one desktop, `depth_metrics` fell from 7.15 s to 0.37 s on
+  the sample, and from 61.9 s to 6.3 s on the AAPL day, where a whole run
+  fell from 90 s to 35 s. numba is now a required dependency
+  (`adr/0003-numba-for-the-rebuild-loops.md`). It adds about
+  110 MiB to a process's memory, and the first call in a new environment
+  compiles the loop, which takes a few seconds; numba caches the result on
+  disk for later processes. `PriceLevelBook`'s array attributes are now
+  views of the book's storage, so a later `update` can change them.
+  `scripts/bench_scale.py` runs the loop once before it times anything, so
+  no stage's seconds include the compile.
 - **One contract per table** (#499). `ob_analytics.schemas.TABLES` holds a
   contract for every table the package returns: events, trades, depth,
   depth_summary, order lifecycles, queue positions, book snapshots, bars and
