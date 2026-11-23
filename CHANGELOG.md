@@ -1259,7 +1259,9 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   `scripts/bench_scale.py` compiles it before it times anything. The engine's
   `queue_positions` now raises `ValueError` for a visible row with a side
   code other than bid or ask, a `NAT_NS` time or a NaN resting price, which
-  the compiled loop cannot queue.
+  the compiled loop cannot queue. `bench-baseline.json` is recorded again on
+  the CI runner. Every CI run compiles both loops, which puts peak memory 155
+  to 270 MiB above a run without numba.
 - **One contract per table** (#499). `ob_analytics.schemas.TABLES` holds a
   contract for every table the package returns: events, trades, depth,
   depth_summary, order lifecycles, queue positions, book snapshots, bars and

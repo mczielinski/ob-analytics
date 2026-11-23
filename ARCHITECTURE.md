@@ -140,7 +140,8 @@ does not settle that test.
 `bench-baseline.json`, which CI compares against on every pull request, was
 recorded on the ubuntu-24.04 GitHub runner. Read it for CI's own numbers. A
 fresh runner has no numba cache, so every CI run compiles the loops, and its
-peak memory is 160 to 210 MiB above a run without numba.
+peak memory is 155 to 270 MiB above a run without numba. Compiling both loops
+in one process costs about 30 MiB more at its peak than compiling one.
 
 **Comfortable ceiling ≈ 5M events (about 4–5 GiB)** on a typical 16 GB machine — i.e.
 session-scale data, a few hours of a single liquid instrument. For larger inputs
