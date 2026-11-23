@@ -91,11 +91,17 @@ def window_bounds(
     return list(zip(starts, ends, strict=True))
 
 
-def _as_utc(value: Any) -> pd.Timestamp:
-    """Return *value* as a tz-aware UTC timestamp; no zone is read as UTC."""
-    ts = pd.Timestamp(value)
+def _as_utc(value: Any, context: str = "run_windows") -> pd.Timestamp:
+    """Return *value* as a tz-aware UTC timestamp; no zone is read as UTC.
+
+    *context* names the caller at the start of the error message.
+    """
+    try:
+        ts = pd.Timestamp(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{context}: {value!r} is not a time ({exc})") from exc
     if ts is pd.NaT:
-        raise ConfigError(f"run_windows: {value!r} is not a time")
+        raise ConfigError(f"{context}: {value!r} is not a time")
     return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
 
 
@@ -182,7 +188,7 @@ class ParquetAppender:
     a run that fails part-way, or a move that fails, leaves the folder as it
     was rather than a file that reads as complete but holds only the first
     windows.  The files carry the same schema version, tick size, lot size,
-    declarations, level and loader's counts metadata as one
+    configuration, declarations, level and loader's counts metadata as one
     :class:`~ob_analytics.data.ParquetWriter` writes, so
     :func:`~ob_analytics.data.load_data` reads the folder as it would a single
     run's.
@@ -192,7 +198,8 @@ class ParquetAppender:
     dest : str or Path
         The output folder, created when missing.
     config : PipelineConfig
-        The run's configuration; its tick and lot sizes are recorded.
+        The run's configuration, recorded whole, as
+        :class:`~ob_analytics.data.ParquetWriter` records it.
     declarations : FeedDeclarations, optional
         The run's declarations, recorded so
         :func:`~ob_analytics.data.load_result` gives them back.
@@ -201,6 +208,10 @@ class ParquetAppender:
     loader_counts : dict of str to int, optional
         The loader's counts over the whole run, recorded in the ``events``
         file as a single run records them.
+    context : str, optional
+        The function writing the files, at the start of an error message.
+    part : str, optional
+        What one call to :meth:`write` holds, in the same message.
     """
 
     def __init__(
@@ -210,8 +221,13 @@ class ParquetAppender:
         declarations: FeedDeclarations | None = None,
         loader_counts: dict[str, int] | None = None,
         level: Level | None = None,
+        context: str = "run_windows",
+        part: str = "window",
     ) -> None:
         self.dest = Path(dest)
+        self._context = context
+        self._part = part
+        self._config = config
         self.dest.mkdir(parents=True, exist_ok=True)
         self._tick_sizes = tick_sizes_from_config(config)
         self._lot_sizes = lot_sizes_from_config(config)
@@ -237,12 +253,13 @@ class ParquetAppender:
         they are not recorded; the ``events`` file records the whole run's,
         as given to the constructor.
         """
-        from ob_analytics.data import _to_arrow_table
+        from ob_analytics.data import ROW_GROUP_ROWS, _to_arrow_table
 
         table = _to_arrow_table(
             frame,
             tick_sizes=self._tick_sizes,
             lot_sizes=self._lot_sizes,
+            config=self._config,
             declarations=self._declarations,
             level=self._level,
             loader_counts=self._loader_counts if name == "events" else None,
@@ -252,7 +269,9 @@ class ParquetAppender:
             schema = _typed(table.schema, like)
             writer = pq.ParquetWriter(self._working(name), schema)
             self._writers[name] = writer
-        writer.write_table(_conform(table, writer.schema, name))
+        writer.write_table(
+            _conform(table, writer.schema, name), row_group_size=ROW_GROUP_ROWS
+        )
 
     def finish(self, names: Iterable[str]) -> None:
         """Close every file and move it into place, once all *names* are written.
@@ -270,8 +289,8 @@ class ParquetAppender:
         missing = [name for name in names if name not in self._writers]
         if missing:
             raise ConfigError(
-                f"run_windows: no window produced rows for {missing}, so the "
-                "output would be incomplete"
+                f"{self._context}: no {self._part} produced rows for "
+                f"{missing}, so the output would be incomplete"
             )
         for writer in self._writers.values():
             writer.close()

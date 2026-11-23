@@ -130,6 +130,12 @@ def load_writer_plugins(*, force: bool = False) -> list[str]:
 
 # ── Canonical Parquet I/O (versioned) ─────────────────────────────────
 
+#: The most rows in one row group of a written file.  Parquet keeps each row
+#: group's smallest and largest value per column, so a reader with a time
+#: filter skips the row groups outside it.  At this size a ``depth_summary``
+#: row group takes about 50 MB in memory.
+ROW_GROUP_ROWS = 131_072
+
 
 def _write_versioned_parquet(
     df: pd.DataFrame,
@@ -167,6 +173,7 @@ def _write_versioned_parquet(
             loader_counts=loader_counts(df.attrs),
         ),
         path,
+        row_group_size=ROW_GROUP_ROWS,
     )
 
 
@@ -498,15 +505,51 @@ def _read_versioned_parquet(path: Path) -> pd.DataFrame:
             f"{path} is not a Parquet file this build can read: {exc}"
         ) from exc
     metadata = table.schema.metadata or {}
+    # The caller of load_data, through _read_versioned_parquet.
+    version = _checked_version(metadata, path, stacklevel=5)
+    return _canonical_frame(table, path.stem, metadata, version)
+
+
+def _checked_version(
+    metadata: dict[bytes, bytes], path: Path, *, stacklevel: int
+) -> str | None:
+    """Return the schema version in *metadata*, once this build can read it.
+
+    *stacklevel* goes to
+    :func:`~ob_analytics.schemas.check_schema_version` as it is.
+    """
     raw = metadata.get(SCHEMA_VERSION_KEY)
     version = raw.decode() if raw is not None else None
-    # The caller of load_data, through _read_versioned_parquet.
-    check_schema_version(version, path=path.name, stacklevel=4)
-    df = table.to_pandas()
+    check_schema_version(version, path=path.name, stacklevel=stacklevel)
+    return version
+
+
+def _canonical_frame(
+    table: pa.Table,
+    name: str,
+    metadata: dict[bytes, bytes],
+    version: str | None,
+    *,
+    release: bool = False,
+) -> pd.DataFrame:
+    """Convert *table*, all or part of the *name* table, to a canonical frame.
+
+    *metadata* is the file's key-value metadata and *version* its schema
+    version.  The dtypes are restored and the tick size, lot size and loader's
+    counts put on ``attrs``, the same way for a whole file and for a part of
+    one.  With *release*, each column's Arrow memory is freed as soon as it is
+    converted, so a large table is not held twice; the caller must then hold
+    no other reference to *table*.
+    """
+    df = (
+        table.to_pandas(self_destruct=True, split_blocks=True)
+        if release
+        else table.to_pandas()
+    )
     # An older version stored float prices and sizes; casting them to integer
     # ticks and lots would change the numbers, so only a current file is cast.
-    if version == SCHEMA_VERSION and path.stem in _RESTORED_DTYPES:
-        df = cast_columns(df, _RESTORED_DTYPES[path.stem])
+    if version == SCHEMA_VERSION and name in _RESTORED_DTYPES:
+        df = cast_columns(df, _RESTORED_DTYPES[name])
     put_units(
         df,
         tick_sizes=decode_tick_sizes(metadata.get(TICK_SIZE_KEY)),
@@ -732,6 +775,7 @@ def _check_target(path: Path, writer: DataWriter, label: str) -> None:
 
 #: The tables a saved run holds, in the order :class:`PipelineResult` lists them.
 _RESULT_TABLES: tuple[str, ...] = ("events", "trades", "depth", "depth_summary")
+_CONFIG_ORDER: tuple[str, ...] = ("depth_summary", "events", "trades", "depth")
 
 
 def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
@@ -822,9 +866,14 @@ def load_result(path: str | Path, *, source: Any = None) -> PipelineResult:
     return result
 
 
-def _recorded(path: Path, key: bytes) -> tuple[Path, bytes] | None:
-    """The first table file of a saved run that records *key*, with its value."""
-    for name in _RESULT_TABLES:
+def _recorded(
+    path: Path, key: bytes, order: tuple[str, ...] = _RESULT_TABLES
+) -> tuple[Path, bytes] | None:
+    """The first table file of a saved run that records *key*, with its value.
+
+    The files are tried in *order*.
+    """
+    for name in order:
         file = path / f"{name}.parquet"
         if not file.is_file():
             continue
@@ -874,7 +923,10 @@ def _saved_declarations(path: Path, source: Any) -> FeedDeclarations:
 
 def _saved_config(path: Path, data: dict[str, pd.DataFrame]) -> PipelineConfig:
     """The config a saved run recorded, or the one its tick and lot size give."""
-    found = _recorded(path, CONFIG_KEY)
+    # The depth summary first: summarize_depth_file can write it again with
+    # other bins, and then its file holds the config that made it, while the
+    # other files still hold the first run's.
+    found = _recorded(path, CONFIG_KEY, _CONFIG_ORDER)
     if found is not None:
         file, raw = found
         try:

@@ -613,7 +613,8 @@ conversion — read the tick size from `result.config.tick_size`, or use
 ## Zero-copy reads in Polars and DuckDB
 
 The files are plain Parquet, so any Arrow-aware tool reads them directly, with no
-pandas step. The examples below are illustrative. **Polars and DuckDB are not
+pandas step. To read them in parts with pandas and no other library, see
+[Reading saved runs in parts](api/scan.md). The examples below are illustrative. **Polars and DuckDB are not
 dependencies of ob-analytics and are not installed by default**; install them
 yourself to run these.
 

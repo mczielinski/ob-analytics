@@ -16,6 +16,10 @@ title: Scale and chunking
     each cut, and writes each window to disk as it finishes. See
     [Windowed runs](#windowed-runs).
 
+    **Second amendment (2026-11-22):** `ob_analytics.scan` reads a saved run
+    one batch at a time and aggregates it, so a saved run larger than memory
+    can be used. See [Reading a saved run in parts](#reading-a-saved-run-in-parts).
+
 ob-analytics keeps the full event, depth, and trade tables in memory (pandas).
 The [scale envelope](architecture.md#scale-envelope) puts the comfortable
 ceiling at **~5M events (~5 GiB peak RSS)** — a few hours of a single liquid
@@ -280,6 +284,98 @@ time.
 - **A source's own depth is not used.** LOBSTER's order book file states the
   book after each message of the whole session, so it cannot be cut. A windowed
   LOBSTER run rebuilds its depth from the messages instead.
+
+## Reading a saved run in parts
+
+`load_data` reads a whole saved run into memory, and a windowed run can write
+a folder far larger than that. The functions in `ob_analytics.scan` read one
+table of the folder one batch of rows at a time, through `pyarrow.dataset`, so
+their memory does not grow with the file:
+
+```python
+import pandas as pd
+from ob_analytics import Pipeline
+from ob_analytics.data import save_data
+from ob_analytics.scan import aggregate_by_time, read_table, summarize_depth_file
+
+save_data(Pipeline().run("orders.csv"), "out")
+
+# The best bid and ask at the end of each minute, and the mean size at the
+# touch over the minute.
+minutes = aggregate_by_time(
+    "out",
+    "depth_summary",
+    "1min",
+    {
+        "best_bid_price": "last",
+        "best_ask_price": "last",
+        "best_bid_vol": "mean",
+        "best_ask_vol": "mean",
+    },
+)
+
+# Ten minutes of three columns. Only these columns are read, and only the row
+# groups that hold rows in the range.
+start = minutes["timestamp"].iloc[5]
+touch = read_table(
+    "out",
+    "depth_summary",
+    columns=["timestamp", "best_bid_price", "best_ask_price"],
+    start=start,
+    end=start + pd.Timedelta("10min"),
+)
+
+# The depth summary again, with 10 bps bins, replayed from the saved depth.
+summarize_depth_file("out", "out-10bps", depth_bps=10)
+```
+
+- **The numbers are the same as in memory.** `aggregate_by_time` reduces each
+  batch per bucket and combines the parts of a bucket that two batches share,
+  so it gives what `frame.groupby(bucket).agg(how)` gives on the whole table.
+  `summarize_depth_file` replays the depth rows through one summary engine,
+  which keeps the book from one batch to the next, so it gives what
+  `summarize_depth` gives on the whole table, row for row. The tests check
+  both with batches of under a thousand rows.
+- **The time range goes to the reader.** Each file is written in row groups
+  of at most 131,072 rows, and Parquet keeps the time range of each one, so a
+  `start` and `end` skip the row groups outside them.
+- **The result must fit.** `read_table` and `aggregate_by_time` return one
+  frame. A short bucket on a long run makes a large result.
+- **`summarize_depth_file` needs the depth rows in time order,** as a run
+  writes them. It stops with an error on a file that is not, and leaves the
+  destination as it was.
+
+### Memory, measured
+
+Measured on 2026-11-23 with `scripts/bench_scale.py --out-of-core`, on one
+Linux x86_64 desktop with 15 GiB of memory. The script saves the bundled
+sample's run, copies its `depth_summary` and `depth` files end to end to make
+longer ones, and measures each size in its own process. "As pandas" is the
+memory the table would take if `load_data` read it.
+
+`aggregate_by_time(folder, "depth_summary", "1min", "mean")`:
+
+| rows | on disk | as pandas | peak RSS | time |
+|-----:|--------:|----------:|---------:|-----:|
+| 314 k | 6 MiB | 0.1 GiB | 590 MiB | 0.2 s |
+| 5.0 M | 95 MiB | 1.7 GiB | 1,027 MiB | 1.3 s |
+| 20.1 M | 379 MiB | 6.9 GiB | 1,123 MiB | 4.6 s |
+| 50.2 M | 948 MiB | 17.2 GiB | 1,160 MiB | 10.8 s |
+
+The largest table would not fit in this machine's memory as a frame. Read in
+parts, it takes about 1.1 GiB. From 5M to 50M rows the peak rises by about
+130 MiB: Arrow keeps some freed memory for reuse rather than handing it back.
+
+`summarize_depth_file(folder, dest)`:
+
+| depth rows | peak RSS | time |
+|-----------:|---------:|-----:|
+| 314 k | 830 MiB | 8 s |
+| 1.3 M | 830 MiB | 30 s |
+| 5.0 M | 830 MiB | 120 s |
+
+The time is the summary engine's, about 25 s per million rows, read in parts
+or not. The memory does not grow with the file.
 
 ## References
 

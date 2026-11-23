@@ -133,6 +133,17 @@ split by time window can each go through `Pipeline.run`.
 [Scale and chunking](https://mczielinski.github.io/ob-analytics/scale-and-chunking/)
 gives the measurements and the limits of a windowed run.
 
+**Reading a saved run is not bound by its size.** `ob_analytics.scan` reads
+one table of a saved folder one batch at a time, so its memory does not grow
+with the file; only the result it returns has to fit.
+On the machine above, `aggregate_by_time` reduced a 50M-row `depth_summary`
+(17.2 GiB as a pandas frame, more than the machine's 15 GiB) to one-minute
+buckets in 11 seconds with a peak of about 1.1 GiB, about 130 MiB more than
+on 5M rows, and `summarize_depth_file` rebuilt the summary from a 5M-row
+`depth` table in 0.8 GiB, the same as from 314k rows.
+*(Measured on 2026-11-23 with `scripts/bench_scale.py --out-of-core`; see
+[Reading a saved run in parts](https://mczielinski.github.io/ob-analytics/scale-and-chunking/#reading-a-saved-run-in-parts).)*
+
 ---
 
 ## Known limitations
@@ -376,6 +387,7 @@ ob_analytics/
 ├── trade_sign.py         # trade-sign classification: tick rule, Lee-Ready, bulk volume classification
 ├── hidden_liquidity.py   # detect_icebergs, hidden_trades
 ├── data.py               # save_data, load_data, load_result, writer registry
+├── scan.py               # read and aggregate a saved run in parts: scan_table, read_table, aggregate_by_time, summarize_depth_file
 ├── interop.py            # export to hftbacktest and Nautilus Trader
 ├── flow_toxicity.py      # vpin, kyle_lambda, trade_imbalance, VpinResult, KyleLambdaResult
 ├── metrics.py            # METRICS registry: register_metric and the built-in metrics

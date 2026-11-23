@@ -463,6 +463,20 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Added
 
+- **Read and aggregate a saved run in parts** (#206). The new module
+  `ob_analytics.scan` reads one table of a saved Parquet folder one batch at a
+  time, through `pyarrow.dataset`, so a run larger than memory can be used.
+  `scan_table` gives the batches as pandas frames, and `read_table` gives the
+  selected rows as one frame; the columns and time range you give go to the
+  Parquet reader. `aggregate_by_time` reduces a table to one row per fixed time
+  bucket (first, last, min, max, sum, count or mean), and
+  `summarize_depth_file` builds a new `depth_summary` from a saved `depth`
+  table, for example with other `depth_bps` and `depth_bins`. Both give the
+  same numbers as the in-memory computation. Parquet files are now written in
+  row groups of at most 131,072 rows, so a time range skips the rest of a file.
+  A `run_windows` folder now records the run's config in each file, as
+  `save_data` does, so `load_result` gives it back.
+  `scripts/bench_scale.py --out-of-core` measures the memory.
 - **A source can say its trades come on another connection** (#555).
   `TradeOrder.VENUE` tells the stale-order check to put trades and order
   events in order by the venue's time (`exchange_timestamp`), not by the time
