@@ -6,9 +6,9 @@ date: 2026-11-22
 # numba is a required dependency, for the rebuild loops
 
 ob-analytics depends on numba. The loops that rebuild a book one event at a
-time are compiled with it. The first of these is the L2 depth replay behind
-`summarize_depth`. There is one code path: no optional extra, and no numpy
-fallback.
+time are compiled with it: the L2 depth replay behind `summarize_depth`, and
+the queue engine behind `queue_positions`. There is one code path: no optional
+extra, and no numpy fallback.
 
 ## Context
 
@@ -71,11 +71,16 @@ not matter to them.
 
 - An install is larger: numba and llvmlite add about 50 MB.
 - The first call in a new environment pays the compile time. `bench_scale.py`
-  runs the compiled loop once before it times anything, so its timings leave
+  runs the compiled loops once before it times anything, so its timings leave
   compile time out.
 - Compiled code is harder to step through in a debugger. Setting
   `NUMBA_DISABLE_JIT=1` runs the same functions as plain Python, very slowly.
-- The queue engine can be compiled next, under the same rules.
+- The queue engine is compiled under the same rules. Its loop is part of the
+  engine (`ob_analytics/engine/_queue_replay.py`), behind the engine's
+  interface, so the engine may now import numba as well as numpy. It still
+  imports no pandas and nothing from the layers above it. The engine cannot
+  import the depth replay, so it keeps its own copy of the small function that
+  falls back to compiling without a cache.
 
 ## Related
 

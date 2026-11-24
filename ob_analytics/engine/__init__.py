@@ -12,8 +12,9 @@ Everything crosses this interface as **numpy arrays**: the shared event schema
 in column form (:class:`OrderEvents`) on the way in, and small result records
 on the way out.  The engine imports no pandas, knows nothing about analytics,
 plots, sources, or files, and never reads a column it was not handed.  That is
-what lets the inside be replaced — numba first, maybe Rust later — or fed one
-event at a time without touching anything above it.
+what lets the inside be replaced, or fed one event at a time, without touching
+anything above it.  The queue reconstruction's loop is already compiled with
+numba, behind this same interface.
 
 Row indices instead of copies
 -----------------------------

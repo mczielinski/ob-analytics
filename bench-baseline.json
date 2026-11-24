@@ -5,97 +5,97 @@
       "run": "sample",
       "stage": "load",
       "events": 314057,
-      "seconds": 0.3953459220000042,
-      "peak_rss_mib": 461.48046875,
-      "reference_seconds": 0.09365565600000991
+      "seconds": 0.47383372800000245,
+      "peak_rss_mib": 491.140625,
+      "reference_seconds": 0.09775883099999305
     },
     {
       "run": "sample",
       "stage": "set_order_types",
       "events": 314057,
-      "seconds": 0.12943409300000042,
-      "peak_rss_mib": 511.8046875,
-      "reference_seconds": 0.09365565600000991
+      "seconds": 0.15755385299999602,
+      "peak_rss_mib": 545.62890625,
+      "reference_seconds": 0.09775883099999305
     },
     {
       "run": "sample",
       "stage": "price_level_volume",
       "events": 314057,
-      "seconds": 0.15267648900000097,
-      "peak_rss_mib": 527.5390625,
-      "reference_seconds": 0.09365565600000991
+      "seconds": 0.17158797599999787,
+      "peak_rss_mib": 556.1015625,
+      "reference_seconds": 0.09775883099999305
     },
     {
       "run": "sample",
       "stage": "depth_metrics",
       "events": 314057,
-      "seconds": 0.31996589300000267,
-      "peak_rss_mib": 665.6796875,
-      "reference_seconds": 0.09365565600000991
+      "seconds": 0.3200264070000003,
+      "peak_rss_mib": 695.265625,
+      "reference_seconds": 0.09775883099999305
     },
     {
       "run": "sample",
       "stage": "order_aggressiveness",
       "events": 314057,
-      "seconds": 0.10257608000000573,
-      "peak_rss_mib": 665.6796875,
-      "reference_seconds": 0.09365565600000991
+      "seconds": 0.11093221000000142,
+      "peak_rss_mib": 695.265625,
+      "reference_seconds": 0.09775883099999305
     },
     {
       "run": "sample",
       "stage": "queue_positions",
       "events": 314057,
-      "seconds": 0.7175182359999894,
-      "peak_rss_mib": 670.8984375,
-      "reference_seconds": 0.09365565600000991
+      "seconds": 0.14409885700000302,
+      "peak_rss_mib": 695.265625,
+      "reference_seconds": 0.09775883099999305
     },
     {
       "run": "synth",
       "stage": "load",
       "events": 316634,
-      "seconds": 1.2353073679999937,
-      "peak_rss_mib": 544.33203125,
-      "reference_seconds": 0.09295777200000543
+      "seconds": 1.549528769999995,
+      "peak_rss_mib": 543.41796875,
+      "reference_seconds": 0.09841247800000019
     },
     {
       "run": "synth",
       "stage": "set_order_types",
       "events": 316634,
-      "seconds": 0.12115174800000261,
-      "peak_rss_mib": 544.33203125,
-      "reference_seconds": 0.09295777200000543
+      "seconds": 0.13937578300000553,
+      "peak_rss_mib": 543.41796875,
+      "reference_seconds": 0.09841247800000019
     },
     {
       "run": "synth",
       "stage": "price_level_volume",
       "events": 316634,
-      "seconds": 0.1584532600000017,
-      "peak_rss_mib": 544.33203125,
-      "reference_seconds": 0.09295777200000543
+      "seconds": 0.18498578199999827,
+      "peak_rss_mib": 543.41796875,
+      "reference_seconds": 0.09841247800000019
     },
     {
       "run": "synth",
       "stage": "depth_metrics",
       "events": 316634,
-      "seconds": 0.157820276999999,
-      "peak_rss_mib": 545.234375,
-      "reference_seconds": 0.09295777200000543
+      "seconds": 0.13723866899999848,
+      "peak_rss_mib": 544.78515625,
+      "reference_seconds": 0.09841247800000019
     },
     {
       "run": "synth",
       "stage": "order_aggressiveness",
       "events": 316634,
-      "seconds": 0.09082555999999897,
-      "peak_rss_mib": 545.234375,
-      "reference_seconds": 0.09295777200000543
+      "seconds": 0.09888313900000867,
+      "peak_rss_mib": 544.78515625,
+      "reference_seconds": 0.09841247800000019
     },
     {
       "run": "synth",
       "stage": "queue_positions",
       "events": 316634,
-      "seconds": 0.8397119689999926,
-      "peak_rss_mib": 554.3125,
-      "reference_seconds": 0.09295777200000543
+      "seconds": 0.11478123700000253,
+      "peak_rss_mib": 544.78515625,
+      "reference_seconds": 0.09841247800000019
     }
   ]
 }

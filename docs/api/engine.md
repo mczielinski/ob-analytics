@@ -7,8 +7,8 @@ title: Order-book engine
 The stateful core: **order events in, book snapshots and order lifecycles out**.
 This is the only part of the library that knows how a book is rebuilt, and the
 only part that holds no pandas — everything crosses its interface as NumPy
-arrays, so the inside can be made faster later (numba, then possibly Rust)
-without anything above it moving.
+arrays, so the inside can be made faster without anything above it moving.
+The queue reconstruction's loop is compiled with numba this way.
 
 Most users never call it directly. Its frame-level faces are
 [`order_book`](book.md#ob_analytics.book.order_book),
