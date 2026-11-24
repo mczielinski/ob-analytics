@@ -81,47 +81,63 @@ order; an L2 run skips the two marked *(L3)*.
 ob-analytics keeps the full event, depth, and trade tables in memory (pandas), so
 the working set scales with the event count. Peak RSS grows roughly **linearly,
 by a little under 1 GiB per 1M events**, with the depth stages
-(`price_level_volume` → `summarize_depth`) dominating both memory and time:
+(`price_level_volume` → `summarize_depth`) holding most of the memory:
 
 | events  | peak RSS  | depth stages |
 |---------|----------:|-------------:|
-| 314 k   | ~0.41 GiB | ~7 s |
-| 628 k   | ~0.66 GiB | ~15 s |
-| 942 k   | ~0.92 GiB | ~23 s |
-| 1.26 M  | ~1.17 GiB | ~30 s |
+| 314 k   | ~0.53 GiB | ~0.5 s |
+| 628 k   | ~0.78 GiB | ~1.0 s |
+| 942 k   | ~1.03 GiB | ~1.5 s |
+| 1.26 M  | ~1.26 GiB | ~2.1 s |
 
-*(Measured on 2026-11-10 with [`scripts/bench_scale.py --envelope`](https://github.com/mczielinski/ob-analytics/blob/main/scripts/bench_scale.py)
+*(Measured on 2026-11-23 with [`scripts/bench_scale.py --envelope`](https://github.com/mczielinski/ob-analytics/blob/main/scripts/bench_scale.py)
 on one Linux x86_64 desktop: the bundled ~314k-event sample tiled to each size,
 each size run in its own process, peak RSS via `getrusage`. The slope is about
 0.8 GiB per 1M events, and a linear extrapolation gives about 4.2 GiB at 5M
-events. Slightly conservative — tiling adds some transient overhead. The
-seconds depend on the machine; the memory does much less.)*
+events. Slightly conservative — tiling adds some transient overhead. About
+110 MiB of each figure is numba and the compiled depth replay, a fixed cost
+that does not grow with the event count. That figure is with numba's disk
+cache already written. A process that compiles the loop itself, as the first
+one in a new environment does, peaks about 60 MiB higher. The seconds depend on the machine;
+the memory does much less.)*
 
 ### Where the time goes
 
-Per stage, on the bundled 314k-event sample, from the speed baseline that CI
-compares against (`bench-baseline.json`, recorded on 2026-11-18 on the
-ubuntu-24.04 GitHub runner by `scripts/bench_scale.py --update-baseline`). The shape
-holds on other machines; the seconds do not. GitHub runners also differ from
-one run to the next: on main, `summarize_depth` has taken between 5 and 17
-seconds on the sample. This baseline comes from a run in the middle of that
-range.
+Per stage, measured on one desktop on 2026-11-23, before and after in the same
+session, with `scripts/bench_scale.py` (the fastest of three passes) for the
+bundled 314k-event sample, and with one pass of `bench_scale.measure_run` for a
+full day of Databento AAPL MBO data (XNAS.ITCH, 2026-11-10, 3.7M events).
+"Before" is the depth replay as numpy calls driven from Python; "after" is the
+same replay compiled with numba
+([ADR 0003](https://github.com/mczielinski/ob-analytics/blob/main/adr/0003-numba-for-the-rebuild-loops.md)).
+The shape holds on other machines; the seconds do not.
 
-| stage | seconds | share |
-|-------|--------:|------:|
-| `load` | 0.68 | 5% |
-| `set_order_types` | 0.19 | 1% |
-| `price_level_volume` | 0.21 | 1% |
-| `summarize_depth` | 11.87 | 84% |
-| `order_aggressiveness` | 0.16 | 1% |
-| `queue_positions` | 1.01 | 7% |
+| stage | sample before | sample after | AAPL day before | AAPL day after |
+|-------|--------------:|-------------:|----------------:|---------------:|
+| `load` | 0.43 | 0.45 | 14.87 | 15.11 |
+| `set_order_types` | 0.13 | 0.14 | 2.65 | 2.63 |
+| `price_level_volume` | 0.15 | 0.15 | 2.48 | 2.50 |
+| `summarize_depth` | 7.15 | 0.37 | 61.94 | 6.31 |
+| `order_aggressiveness` | 0.10 | 0.10 | 1.30 | 1.28 |
+| `queue_positions` | 0.64 | 0.65 | 6.57 | 6.69 |
+| total | 8.60 | 1.86 | 89.82 | 34.52 |
 
-One numpy kernel is about 85% of the run. The stateful FIFO loop is 7%, and
-everything the loader and the frames do together is under 10% — which is the
-number [ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md)
-asks for before a second
-dataframe library could pay for itself, and it falls well short of the 30% gate
-that record sets. CI checks these numbers on every pull request.
+Compiling the depth replay made it about 19 times faster on the sample and 10
+times faster on the AAPL day, with the same output, value for value. It is now
+20% of a run on the sample and 18% on the AAPL day. The queue loop is the
+other stateful loop, at 35% and 19%, and is the next one to compile. On the
+AAPL day, reading the DBN file is now the largest stage, at 44%.
+
+Reading and the frame stages (`load`, `set_order_types`, `price_level_volume`
+and `order_aggressiveness`) are now 62% of the AAPL day. [ADR 0002](https://github.com/mczielinski/ob-analytics/blob/main/adr/0002-dataframe-library.md)
+names 30% of a run at 5M events or more as one of its two conditions for
+looking at a second dataframe library again. This day has 3.7M events, so it
+does not settle that test.
+
+`bench-baseline.json`, which CI compares against on every pull request, was
+recorded on the ubuntu-24.04 GitHub runner. Read it for CI's own numbers. A
+fresh runner has no numba cache, so every CI run compiles the loop, and its
+peak memory is 160 to 210 MiB above a run without numba.
 
 **Comfortable ceiling ≈ 5M events (about 4–5 GiB)** on a typical 16 GB machine — i.e.
 session-scale data, a few hours of a single liquid instrument. For larger inputs
@@ -384,6 +400,7 @@ ob_analytics/
 ├── quality.py            # data_quality_summary, detect_sequence_gaps, detect_stale_orders
 ├── queue.py              # frame faces for the engine's queue reconstruction
 ├── depth.py              # DepthSummaryEngine, price_level_volume, summarize_depth, get_spread, micro_price
+├── _depth_replay.py      # Compiled (numba) loops of the depth replay: PriceLevelBook updates, summary rows
 ├── trade_sign.py         # trade-sign classification: tick rule, Lee-Ready, bulk volume classification
 ├── hidden_liquidity.py   # detect_icebergs, hidden_trades
 ├── data.py               # save_data, load_data, load_result, writer registry

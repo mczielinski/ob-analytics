@@ -5,85 +5,97 @@
       "run": "sample",
       "stage": "load",
       "events": 314057,
-      "seconds": 0.6795685900000024,
-      "peak_rss_mib": 236.671875
+      "seconds": 0.3953459220000042,
+      "peak_rss_mib": 461.48046875,
+      "reference_seconds": 0.09365565600000991
     },
     {
       "run": "sample",
       "stage": "set_order_types",
       "events": 314057,
-      "seconds": 0.18812452399998847,
-      "peak_rss_mib": 284.16015625
+      "seconds": 0.12943409300000042,
+      "peak_rss_mib": 511.8046875,
+      "reference_seconds": 0.09365565600000991
     },
     {
       "run": "sample",
       "stage": "price_level_volume",
       "events": 314057,
-      "seconds": 0.20796775799999523,
-      "peak_rss_mib": 287.73828125
+      "seconds": 0.15267648900000097,
+      "peak_rss_mib": 527.5390625,
+      "reference_seconds": 0.09365565600000991
     },
     {
       "run": "sample",
       "stage": "depth_metrics",
       "events": 314057,
-      "seconds": 11.872872114000003,
-      "peak_rss_mib": 428.15625
+      "seconds": 0.31996589300000267,
+      "peak_rss_mib": 665.6796875,
+      "reference_seconds": 0.09365565600000991
     },
     {
       "run": "sample",
       "stage": "order_aggressiveness",
       "events": 314057,
-      "seconds": 0.16159064099998943,
-      "peak_rss_mib": 428.15625
+      "seconds": 0.10257608000000573,
+      "peak_rss_mib": 665.6796875,
+      "reference_seconds": 0.09365565600000991
     },
     {
       "run": "sample",
       "stage": "queue_positions",
       "events": 314057,
-      "seconds": 1.0146719840000031,
-      "peak_rss_mib": 439.7421875
+      "seconds": 0.7175182359999894,
+      "peak_rss_mib": 670.8984375,
+      "reference_seconds": 0.09365565600000991
     },
     {
       "run": "synth",
       "stage": "load",
       "events": 316634,
-      "seconds": 1.972550549999994,
-      "peak_rss_mib": 380.47265625
+      "seconds": 1.2353073679999937,
+      "peak_rss_mib": 544.33203125,
+      "reference_seconds": 0.09295777200000543
     },
     {
       "run": "synth",
       "stage": "set_order_types",
       "events": 316634,
-      "seconds": 0.1700751780000047,
-      "peak_rss_mib": 380.47265625
+      "seconds": 0.12115174800000261,
+      "peak_rss_mib": 544.33203125,
+      "reference_seconds": 0.09295777200000543
     },
     {
       "run": "synth",
       "stage": "price_level_volume",
       "events": 316634,
-      "seconds": 0.23523019099999942,
-      "peak_rss_mib": 380.47265625
+      "seconds": 0.1584532600000017,
+      "peak_rss_mib": 544.33203125,
+      "reference_seconds": 0.09295777200000543
     },
     {
       "run": "synth",
       "stage": "depth_metrics",
       "events": 316634,
-      "seconds": 4.100220409000002,
-      "peak_rss_mib": 385.45703125
+      "seconds": 0.157820276999999,
+      "peak_rss_mib": 545.234375,
+      "reference_seconds": 0.09295777200000543
     },
     {
       "run": "synth",
       "stage": "order_aggressiveness",
       "events": 316634,
-      "seconds": 0.13315562399999692,
-      "peak_rss_mib": 385.45703125
+      "seconds": 0.09082555999999897,
+      "peak_rss_mib": 545.234375,
+      "reference_seconds": 0.09295777200000543
     },
     {
       "run": "synth",
       "stage": "queue_positions",
       "events": 316634,
-      "seconds": 1.182305367000012,
-      "peak_rss_mib": 390.51953125
+      "seconds": 0.8397119689999926,
+      "peak_rss_mib": 554.3125,
+      "reference_seconds": 0.09295777200000543
     }
   ]
 }

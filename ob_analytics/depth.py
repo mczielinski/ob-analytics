@@ -18,7 +18,7 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
-from ob_analytics import _engine_frames
+from ob_analytics import _depth_replay, _engine_frames
 from ob_analytics._utils import (
     decimal_places,
     epoch_ns,
@@ -69,15 +69,14 @@ def _cached_breaks(range_len: int, bins: int) -> np.ndarray:
     last offset of the window is left out.  The boundaries never go
     backwards, so no bin is negative.  When the window has fewer ticks than
     bins, some boundaries repeat, and a bin that ends on the same boundary as
-    the bin before it stays at zero.  The
-    best price (offset ``0``) is always in the first bin, even when the window
-    is a single tick.
+    the bin before it stays at zero.  The best price (offset ``0``) is always
+    in the first bin, even when the window is a single tick.
+
+    The depth replay computes the same boundaries in its compiled loop; this
+    is that computation, callable from Python.
     """
-    breaks = ((np.arange(1, bins + 1) * range_len + bins - 1) // bins) - 1
-    # Capping every boundary at the last offset keeps them in order.  With at
-    # least as many ticks as bins, only the last boundary changes, by one, so
-    # outputs at normal prices are unchanged (#488).
-    np.minimum(breaks, max(range_len - 2, 0), out=breaks)
+    breaks = np.empty(bins, dtype=np.int64)
+    _depth_replay.fill_breaks(range_len, bins, breaks)
     return breaks
 
 
@@ -94,51 +93,22 @@ def _interval_sums_sorted(
     vols`` and zeros everywhere else.  Because volumes are non-negative and
     ``x + 0.0 == x`` for finite ``x``, accumulating the active levels in
     ascending-offset order reproduces ``cumsum(dense)`` at every index
-    bit-for-bit; the prefix sums are sampled at ``breaks`` and differenced.
+    bit-for-bit; the running total is sampled at ``breaks`` and differenced.
 
-    *idxs* must already be clipped to ``[0, range_len)``.
+    *idxs* must already be clipped to ``[0, range_len)``.  The depth replay
+    bins each side with the same compiled loop; this calls it from Python.
     """
-    bins = len(breaks)
-    if idxs.size == 0:
-        return np.zeros(bins, dtype=np.float64)
-
-    prefix = vols.cumsum()
-
-    # prefix[j] equals the dense cumulative sum at the j-th active offset.
-    # Negative break indices address from the end, matching the numpy fancy
-    # indexing ``cs[breaks]`` of the dense reference.
-    breaks_norm = np.where(breaks < 0, range_len + breaks, breaks)
-    # ``pos`` is at most ``idxs.size - 1``; a -1 (no active level at or below
-    # the break) indexes the last prefix harmlessly and is masked to zero.
-    pos = idxs.searchsorted(breaks_norm, side="right") - 1
-    intervals = np.where(pos >= 0, prefix[pos], 0.0)
-
-    sums = np.empty_like(intervals)
-    sums[0] = intervals[0]
-    np.subtract(intervals[1:], intervals[:-1], out=sums[1:])
+    sums = np.zeros(len(breaks), dtype=np.float64)
+    _depth_replay.bin_walk(idxs, vols, 0, 1, 1, 0, range_len, breaks, sums, 0)
     return sums
-
-
-def _insert(values: np.ndarray, i: int, value: float) -> np.ndarray:
-    """``np.insert(values, i, value)`` for a 1-D array, without its overhead."""
-    out = np.empty(values.size + 1, dtype=values.dtype)
-    out[:i] = values[:i]
-    out[i] = value
-    out[i + 1 :] = values[i:]
-    return out
-
-
-def _delete(values: np.ndarray, i: int) -> np.ndarray:
-    """``np.delete(values, i)`` for a 1-D array, without its overhead."""
-    return np.concatenate((values[:i], values[i + 1 :]))
 
 
 class PriceLevelBook:
     """The book at L2: the size resting at each price level, kept one row at a time.
 
-    Each side is a set of parallel numpy arrays sorted ascending by price, so
+    Each side is a set of parallel numpy arrays, read ascending by price, so
     the best ask is the first entry of its side and the best bid the last.
-    Lookups are a ``searchsorted``.
+    The rows are applied by a loop that numba compiles to machine code.
 
     :meth:`update` applies one row of the depth table: a positive volume sets
     the size at that price, and zero removes the price level.  Every level is
@@ -163,45 +133,71 @@ class PriceLevelBook:
     :class:`DepthSummaryEngine` builds the depth summary on this class, so the
     quoted levels here are the depth summary's book after every row.
 
+    The arrays :attr:`bid_prices`, :attr:`ask_prices` and the other array
+    properties return, and those the ``quoted_*`` methods return, are views of
+    the book's own storage, so a later :meth:`update` can change them.  Copy
+    one to keep it.
+
     Parameters
     ----------
     price_dtype : numpy dtype, optional
         The dtype prices are held in: ``int64`` ticks (the default), or
         ``float64`` for a depth table already converted to the quote currency.
-
-    Attributes
-    ----------
-    bid_prices, bid_volumes : numpy.ndarray
-        Every bid level, ascending by price.
-    ask_prices, ask_volumes : numpy.ndarray
-        Every ask level, ascending by price.
-    crossed_bids, crossed_asks : int
-        How many levels at each side's best end the quoted book leaves out.
     """
 
     __slots__ = (
-        "_ask_updated",
-        "_bid_updated",
-        "_clock",
-        "ask_prices",
-        "ask_volumes",
-        "bid_prices",
-        "bid_volumes",
-        "crossed_asks",
-        "crossed_bids",
+        "_ask_prices",
+        "_ask_stamps",
+        "_ask_volumes",
+        "_bid_prices",
+        "_bid_stamps",
+        "_bid_volumes",
+        "_meta",
     )
 
     def __init__(self, price_dtype: type | np.dtype = np.int64) -> None:
-        self.ask_prices: np.ndarray = np.empty(0, dtype=price_dtype)
-        self.ask_volumes: np.ndarray = np.empty(0, dtype=np.float64)
-        self.bid_prices: np.ndarray = np.empty(0, dtype=price_dtype)
-        self.bid_volumes: np.ndarray = np.empty(0, dtype=np.float64)
+        # Each side's arrays have room for more levels than it holds; the
+        # level counts and the crossed counts are in ``_meta``.  Each side
+        # keeps its best price last, so the asks are stored descending and
+        # read through a reversed view.
+        self._ask_prices: np.ndarray = np.empty(0, dtype=price_dtype)
+        self._ask_volumes: np.ndarray = np.empty(0, dtype=np.float64)
+        self._bid_prices: np.ndarray = np.empty(0, dtype=price_dtype)
+        self._bid_volumes: np.ndarray = np.empty(0, dtype=np.float64)
         # When each level was last set, as a count of updates applied.
-        self._ask_updated: np.ndarray = np.empty(0, dtype=np.int64)
-        self._bid_updated: np.ndarray = np.empty(0, dtype=np.int64)
-        self._clock = 0
-        self.crossed_asks = 0
-        self.crossed_bids = 0
+        self._ask_stamps: np.ndarray = np.empty(0, dtype=np.int64)
+        self._bid_stamps: np.ndarray = np.empty(0, dtype=np.int64)
+        self._meta: np.ndarray = np.zeros(_depth_replay.META_SIZE, dtype=np.int64)
+
+    @property
+    def bid_prices(self) -> np.ndarray:
+        """Every bid level's price, ascending."""
+        return self._bid_prices[: self._meta[_depth_replay.META_BIDS]]
+
+    @property
+    def bid_volumes(self) -> np.ndarray:
+        """Every bid level's volume, in the order of :attr:`bid_prices`."""
+        return self._bid_volumes[: self._meta[_depth_replay.META_BIDS]]
+
+    @property
+    def ask_prices(self) -> np.ndarray:
+        """Every ask level's price, ascending."""
+        return self._ask_prices[: self._meta[_depth_replay.META_ASKS]][::-1]
+
+    @property
+    def ask_volumes(self) -> np.ndarray:
+        """Every ask level's volume, in the order of :attr:`ask_prices`."""
+        return self._ask_volumes[: self._meta[_depth_replay.META_ASKS]][::-1]
+
+    @property
+    def crossed_bids(self) -> int:
+        """How many of the highest bids the quoted book leaves out."""
+        return int(self._meta[_depth_replay.META_CROSSED_BIDS])
+
+    @property
+    def crossed_asks(self) -> int:
+        """How many of the lowest asks the quoted book leaves out."""
+        return int(self._meta[_depth_replay.META_CROSSED_ASKS])
 
     def update(self, price: float, volume: float, side: int) -> bool:
         """Apply one depth row and return whether the other side's quote changed.
@@ -222,64 +218,93 @@ class PriceLevelBook:
             ``True`` when the row changed which levels of the other side are
             quoted, so that side's quoted book changed too.
         """
-        if side == 1:
-            prices, vols, stamps = self.ask_prices, self.ask_volumes, self._ask_updated
-        else:
-            prices, vols, stamps = self.bid_prices, self.bid_volumes, self._bid_updated
-
-        # The walk below visits levels from each best end down to the quoted
-        # touch only, so a row strictly behind its side's quoted touch cannot
-        # change which levels are crossed.  Most rows are behind it.
-        if side == 1:
-            k = self.crossed_asks
-            behind = k < prices.size and price > prices[k]
-        else:
-            k = prices.size - 1 - self.crossed_bids
-            behind = k >= 0 and price < prices[k]
-
-        self._clock += 1
-        i = int(prices.searchsorted(price))
-        found = i < prices.size and prices[i] == price
-        if volume > 0:
-            if found:
-                vols[i] = volume
-                stamps[i] = self._clock
-            else:
-                prices = _insert(prices, i, price)
-                vols = _insert(vols, i, volume)
-                stamps = _insert(stamps, i, self._clock)
-        elif found:
-            prices = _delete(prices, i)
-            vols = _delete(vols, i)
-            stamps = _delete(stamps, i)
-
-        if side == 1:
-            self.ask_prices, self.ask_volumes, self._ask_updated = prices, vols, stamps
-        else:
-            self.bid_prices, self.bid_volumes, self._bid_updated = prices, vols, stamps
-        if behind:
-            return False
-
-        before = self.crossed_bids if side == 1 else self.crossed_asks
-        bids, asks = self.bid_prices, self.ask_prices
-        if bids.size and asks.size and bids[-1] >= asks[0]:
-            # Crossed or locked: walk the touch from both best ends.
-            self.crossed_bids, self.crossed_asks = _engine_frames.crossed_touch_counts(
-                bids[::-1], self._bid_updated[::-1], asks, self._ask_updated
+        self._make_room(side)
+        return bool(
+            _depth_replay.apply_row(
+                self._bid_prices,
+                self._bid_volumes,
+                self._bid_stamps,
+                self._ask_prices,
+                self._ask_volumes,
+                self._ask_stamps,
+                self._meta,
+                price,
+                volume,
+                side,
             )
-        else:
-            self.crossed_bids = self.crossed_asks = 0
-        return before != (self.crossed_bids if side == 1 else self.crossed_asks)
+        )
 
     def quoted_bids(self) -> tuple[np.ndarray, np.ndarray]:
         """The quoted bid levels, ascending by price: prices and volumes."""
-        n = self.bid_prices.size - self.crossed_bids
-        return self.bid_prices[:n], self.bid_volumes[:n]
+        n = self._meta[_depth_replay.META_BIDS] - self.crossed_bids
+        return self._bid_prices[:n], self._bid_volumes[:n]
 
     def quoted_asks(self) -> tuple[np.ndarray, np.ndarray]:
         """The quoted ask levels, ascending by price: prices and volumes."""
-        k = self.crossed_asks
-        return self.ask_prices[k:], self.ask_volumes[k:]
+        n = self._meta[_depth_replay.META_ASKS] - self.crossed_asks
+        return self._ask_prices[:n][::-1], self._ask_volumes[:n][::-1]
+
+    def _make_room(self, side: int) -> None:
+        """Give *side* room for one more level, doubling its arrays if full."""
+        if side == 1:
+            if self._meta[_depth_replay.META_ASKS] == self._ask_prices.size:
+                self._ask_prices = _depth_replay.grown(self._ask_prices)
+                self._ask_volumes = _depth_replay.grown(self._ask_volumes)
+                self._ask_stamps = _depth_replay.grown(self._ask_stamps)
+        elif self._meta[_depth_replay.META_BIDS] == self._bid_prices.size:
+            self._bid_prices = _depth_replay.grown(self._bid_prices)
+            self._bid_volumes = _depth_replay.grown(self._bid_volumes)
+            self._bid_stamps = _depth_replay.grown(self._bid_stamps)
+
+    def _write_side(
+        self, side: int, bps: int, bins: int, breaks: np.ndarray, out: np.ndarray
+    ) -> None:
+        """Write one side's depth summary columns into the row *out*."""
+        _depth_replay.write_side(
+            self._bid_prices,
+            self._bid_volumes,
+            self._ask_prices,
+            self._ask_volumes,
+            self._meta,
+            side,
+            bps,
+            bins,
+            breaks,
+            out,
+        )
+
+    def _replay(
+        self,
+        prices: np.ndarray,
+        volumes: np.ndarray,
+        sides: np.ndarray,
+        bps: int,
+        bins: int,
+        result: np.ndarray,
+    ) -> None:
+        """Apply every row and write the depth summary row after each into *result*."""
+        (
+            self._bid_prices,
+            self._bid_volumes,
+            self._bid_stamps,
+            self._ask_prices,
+            self._ask_volumes,
+            self._ask_stamps,
+        ) = _depth_replay.replay(
+            self._bid_prices,
+            self._bid_volumes,
+            self._bid_stamps,
+            self._ask_prices,
+            self._ask_volumes,
+            self._ask_stamps,
+            self._meta,
+            prices,
+            volumes,
+            sides,
+            bps,
+            bins,
+            result,
+        )
 
 
 class BookLevels(NamedTuple):
@@ -400,18 +425,14 @@ def book_levels(
 class DepthSummaryEngine:
     """Build the depth summary one depth row at a time.
 
-    :meth:`compute` processes a whole depth frame; internally each event is
-    applied via :meth:`update_side`, which writes one summary row into a
-    pre-allocated numpy buffer.
+    :meth:`compute` processes a whole depth frame.  It applies the rows to a
+    :class:`PriceLevelBook` and writes one summary row after each into a
+    pre-allocated numpy matrix, in one loop that numba compiles to machine
+    code.  The matrix becomes a DataFrame once, at the end.
+    :meth:`update_side` applies a single row the same way.
 
-    The book itself is a :class:`PriceLevelBook`, which holds each side as
-    parallel numpy arrays sorted ascending by integer price.  BPS-bin sums
-    vectorize over the in-window slice of those arrays instead of iterating
-    every active level in Python (levels average ~1.8k per side on the
-    bundled sample, making that iteration the pipeline's former hot loop).
-
-    Output is written into a pre-allocated numpy matrix and converted to a
-    DataFrame once at the end; bin boundaries are ``@lru_cache``-d.
+    The first call in a new Python process compiles the loop, or loads it
+    from numba's cache on disk when an earlier process has compiled it.
 
     Parameters
     ----------
@@ -430,6 +451,9 @@ class DepthSummaryEngine:
         self._bps = self._config.depth_bps
         self._bins = self._config.depth_bins
         self._row_len = 2 * (2 + self._bins)
+        # Room for the bin boundaries, which the compiled loop recomputes for
+        # each row it writes.
+        self._breaks = np.empty(self._bins, dtype=np.int64)
 
     # ── Diagnostic views (state lives in the PriceLevelBook) ─────────
 
@@ -512,8 +536,8 @@ class DepthSummaryEngine:
             prices_int = np.rint(price_values).astype(np.int64)
         else:
             prices_int = price_values.astype(np.int64)
-        volumes = ordered["volume"].values
-        sides = np.where(ordered["direction"].values == "bid", 0, 1)
+        volumes = ordered["volume"].to_numpy()
+        sides = np.where(ordered["direction"].to_numpy() == "bid", 0, 1)
 
         n = len(ordered)
         result = np.zeros((n, self._row_len), dtype=np.float64)
@@ -522,12 +546,14 @@ class DepthSummaryEngine:
         # second call carries on from where the first left off.  Each row
         # writes only the side it changes, and a fresh engine's empty book
         # writes zeros, so a single call is unaffected.
-        self._write_side_metrics(0, result[0])
-        self._write_side_metrics(1, result[0])
-        for i in range(n):
-            if i > 0:
-                result[i] = result[i - 1]
-            self.update_side(int(prices_int[i]), volumes[i], int(sides[i]), result[i])
+        self._book._replay(
+            np.ascontiguousarray(prices_int),
+            np.ascontiguousarray(volumes, dtype=np.float64),
+            sides.astype(np.int64, copy=False),
+            self._bps,
+            self._bins,
+            result,
+        )
 
         col_names = self._column_names()
 
@@ -583,52 +609,13 @@ class DepthSummaryEngine:
         """
         if self._book.update(price, volume, side):
             # The row changed which opposing levels are quoted; emit that
-            # side's metrics too, otherwise compute() carries the stale
-            # opposing columns over.
+            # side's metrics too, otherwise a caller that carries the row
+            # over keeps the stale opposing columns.
             self._write_side_metrics(1 - side, out)
         self._write_side_metrics(side, out)
 
     def _write_side_metrics(self, side: int, out: np.ndarray) -> None:
-        if side == 1:
-            offset = 2 + self._bins
-            prices, vols = self._book.quoted_asks()
-        else:
-            offset = 0
-            prices, vols = self._book.quoted_bids()
-
-        if not prices.size:
-            out[offset] = 0
-            out[offset + 1] = 0
-            out[offset + 2 : offset + 2 + self._bins] = 0
-            return
-
-        best = int(prices[0]) if side == 1 else int(prices[-1])
-        out[offset] = best
-        out[offset + 1] = vols[0] if side == 1 else vols[-1]
-
-        # Window covered by the BPS bins, mirroring the legacy code:
-        #   ask: arange(best_ask, end_value + 1) inclusive ascending.
-        #   bid: arange(best_bid, end_value - 1, -1) inclusive descending.
-        # The in-window levels are a contiguous slice of the sorted arrays;
-        # offsets are handed to the binning core in ascending order (bids
-        # reversed), reproducing the dense cumsum accumulation order.
-        if side == 1:
-            end_value = round((1 + self._bps * self._bins * 0.0001) * best) + 1
-            range_len = end_value - best + 1
-            k = int(prices.searchsorted(best + range_len, side="left"))
-            idxs = prices[:k] - best
-            win_vols = vols[:k]
-        else:
-            end_value = round((1 - self._bps * self._bins * 0.0001) * best)
-            range_len = best - end_value + 1
-            j = int(prices.searchsorted(best - range_len, side="right"))
-            idxs = (best - prices[j:])[::-1]
-            win_vols = vols[j:][::-1]
-
-        breaks = _cached_breaks(range_len, self._bins)
-        out[offset + 2 : offset + 2 + self._bins] = _interval_sums_sorted(
-            idxs, win_vols, range_len, breaks
-        )
+        self._book._write_side(side, self._bps, self._bins, self._breaks, out)
 
     # ── Helpers ───────────────────────────────────────────────────────
 
