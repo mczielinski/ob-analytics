@@ -191,8 +191,6 @@ class TestRendererMissing:
 # Raises that report the package's own broken state, not a caller's mistake,
 # by file and the function that raises.
 _INTERNAL_RAISES = {
-    # Combining no parts; the caller refuses a run with no orders first.
-    ("analytics.py", "combine", "ValueError"),
     # A circular reference, raised as json.dumps raises it.
     ("capture_files.py", "_encode", "ValueError"),
     # A message helper asked to name no levels.

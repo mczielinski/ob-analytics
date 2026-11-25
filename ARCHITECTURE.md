@@ -148,8 +148,10 @@ session-scale data, a few hours of a single liquid instrument. For larger inputs
 (a full NASDAQ MBO day is **10–100M events**, well past this), use
 `Pipeline.run_windows`: it cuts one input into time windows, runs the depth
 stages on one window at a time, and writes each window's rows to Parquet as it
-finishes, so peak memory is set by the largest window. Files that are already
-split by time window can each go through `Pipeline.run`.
+finishes, so peak memory is set by the largest window. With one-hour windows,
+ten days of Databento AAPL MBO data (38.7M records) peaked at 1.43 GiB, and one
+day at 1.25 GiB; a single run of one day peaks at about 3.8 GiB. Files that are
+already split by time window can each go through `Pipeline.run`.
 [Scale and chunking](https://mczielinski.github.io/ob-analytics/scale-and-chunking/)
 gives the measurements and the limits of a windowed run.
 

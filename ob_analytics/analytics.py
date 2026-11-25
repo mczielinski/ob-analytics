@@ -10,7 +10,6 @@ in :mod:`ob_analytics.quality`.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -411,9 +410,9 @@ class _OrderFacts:
     """What the order-type rule reads of the events: a few values per order.
 
     :func:`set_order_types` reads them off a whole run at once.  A windowed run
-    reads them one window at a time and joins the parts with :meth:`combine`,
-    so it never holds the whole run's events.  The rule itself is
-    :func:`_order_types`.
+    reads them one window at a time and writes them to files
+    (:class:`~ob_analytics._windows.OrderTypeFiles`), so it holds neither the
+    whole run's events nor its facts.  The rule itself is :func:`_order_types`.
 
     Attributes
     ----------
@@ -451,26 +450,15 @@ class _OrderFacts:
             ],
         )
 
-    @classmethod
-    def combine(cls, parts: Iterable[_OrderFacts]) -> _OrderFacts:
-        """Join the facts of consecutive parts of one run."""
-        parts = list(parts)
-        if not parts:
-            raise ValueError("_OrderFacts.combine: no parts to combine")
-        return cls(
-            ids=parts[0].ids.append([p.ids for p in parts[1:]]).unique(),
-            created=pd.concat([p.created for p in parts], ignore_index=True),
-            deleted=pd.concat([p.deleted for p in parts], ignore_index=True),
-            changed=parts[0].changed.append([p.changed for p in parts[1:]]).unique(),
-            named=pd.concat([p.named for p in parts], ignore_index=True),
-        )
 
-
-def _order_types(facts: _OrderFacts, trades: pd.DataFrame) -> pd.Series:
+def _order_types(
+    facts: _OrderFacts, trades: pd.DataFrame, *, warn: bool = True
+) -> pd.Series:
     """Return each order's type, on an index of order ids.
 
     The rule :func:`set_order_types` applies; see it for what each type means.
-    An order whose type the rule cannot tell is ``"unknown"``.
+    An order whose type the rule cannot tell is ``"unknown"``, and a warning
+    gives their number unless *warn* is off.
     """
     created, deleted = facts.created, facts.deleted
     created_ids, deleted_ids = created["id"], deleted["id"]
@@ -516,14 +504,22 @@ def _order_types(facts: _OrderFacts, trades: pd.DataFrame) -> pd.Series:
         ["market", "market-limit", "resting-limit", "cancelled-limit", "pre-existing"],
         default="unknown",
     )
-    unidentified = int((kind == "unknown").sum())
-    if unidentified:
-        warnings.warn(
-            f"Could not classify {unidentified} orders; their type is 'unknown'",
-            # The caller of set_order_types.
-            stacklevel=3,
-        )
+    if warn:
+        # The caller of set_order_types.
+        _warn_on_unknown_orders(int((kind == "unknown").sum()), stacklevel=4)
     return pd.Series(kind, index=ids, name="type")
+
+
+def _warn_on_unknown_orders(count: int, *, stacklevel: int) -> None:
+    """Warn that *count* orders have the type ``"unknown"``, when there are any.
+
+    *stacklevel* is as for :func:`warnings.warn`: 1 is this function.
+    """
+    if count:
+        warnings.warn(
+            f"Could not classify {count} orders; their type is 'unknown'",
+            stacklevel=stacklevel,
+        )
 
 
 def _with_order_types(events: pd.DataFrame, types: pd.Series) -> pd.DataFrame:
