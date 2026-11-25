@@ -606,14 +606,21 @@ class WindowedLoader(Protocol):
         self,
         path: Any,
         windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+        *,
+        working: Path | None = None,
     ) -> Iterator[LoadedWindow]:
         """Yield each of *windows*' events in turn.
 
         The events are the rows the loader's ``load`` gives, cut at the
         windows: a window holds the rows at or after its start and before its
-        end.  Once the last window is yielded, the run's trade reader, given
-        an empty events frame, builds the whole run's trades from what the
-        loader kept.
+        end.  For a price-level source they are the depth rows, and no event
+        is named.  Once the last window is yielded, the run's trade reader,
+        given an empty events frame, builds the whole run's trades from what
+        the loader kept.
+
+        *working* is an empty folder the loader may keep files in while it
+        reads, such as rows it sorts on disk; the caller deletes it.  A loader
+        that needs none ignores it, and one given ``None`` makes its own.
         """
         ...
 

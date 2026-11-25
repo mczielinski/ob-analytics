@@ -7,7 +7,11 @@ shared internals.  Nothing in this module is part of the public API.
 from __future__ import annotations
 
 import math
+import pickle
 import warnings
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -191,6 +195,59 @@ def read_csv_file(path: object, where: str, **kwargs: Any) -> pd.DataFrame:
         raise ConfigError(
             f"{where}: not a CSV file this reader can read ({exc})."
         ) from exc
+
+
+def read_csv_parts(
+    path: object, where: str, rows: int, **kwargs: Any
+) -> Iterator[pd.DataFrame]:
+    """Yield the rows of a CSV file *rows* at a time, as :func:`read_csv_file` reads them.
+
+    Each part keeps the file's row numbers as its index, counted from 0, so
+    the parts go on from one another.  An empty file yields no part.
+
+    A check run on one part counts that part's rows from 1;
+    :func:`rows_counted_from` says in its error where the part starts.
+
+    Raises
+    ------
+    ConfigError
+        If the file is not text, or is not laid out as a CSV file.
+    """
+    try:
+        reader = pd.read_csv(path, chunksize=rows, **kwargs)  # ty: ignore[no-matching-overload]
+    except pd.errors.EmptyDataError:
+        return
+    except (UnicodeDecodeError, pd.errors.ParserError) as exc:
+        raise ConfigError(
+            f"{where}: not a CSV file this reader can read ({exc})."
+        ) from exc
+    with reader:
+        while True:
+            try:
+                part = next(reader)
+            except StopIteration:
+                return
+            except (UnicodeDecodeError, pd.errors.ParserError) as exc:
+                raise ConfigError(
+                    f"{where}: not a CSV file this reader can read ({exc})."
+                ) from exc
+            yield part
+
+
+@contextmanager
+def rows_counted_from(first: int) -> Generator[None]:
+    """Say in a :class:`ConfigError` raised inside which row of the file is its row 1.
+
+    For a check run on one part of a file (:func:`read_csv_parts`), whose
+    rows it counts from the start of the part.  The error of the first part,
+    whose row 1 is the file's, is left as it is.
+    """
+    try:
+        yield
+    except ConfigError as exc:
+        if first == 1:
+            raise
+        raise ConfigError(f"{exc} (Row 1 here is row {first} of the file.)") from exc
 
 
 def _refuse_rows(
@@ -946,3 +1003,79 @@ def taker_codes(takers: pd.Series) -> np.ndarray:
     unknown = codes < 0
     codes[unknown] = -1 - np.flatnonzero(unknown)
     return codes
+
+
+# ---------------------------------------------------------------------------
+# Reading an input one window at a time
+# ---------------------------------------------------------------------------
+
+
+def window_labels(
+    timestamps: pd.Series,
+    windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+) -> np.ndarray:
+    """Return the number of the window each row of *timestamps* falls in.
+
+    Windows are numbered from 0.  A row with no time falls in the first
+    window, as in :func:`~ob_analytics._windows.window_positions`.
+    """
+    cuts = epoch_ns([start for start, _ in windows[1:] if start is not None])
+    return np.searchsorted(cuts, epoch_ns(timestamps), side="right")
+
+
+class FrameFiles:
+    """Frames saved to files on disk under a number, and read back in order.
+
+    A loader that reads its input one window at a time uses this to sort the
+    rows of the input by window, or by group of orders, without holding them
+    all.  Each number has one file, and each frame added under it is appended
+    to that file.
+
+    Parameters
+    ----------
+    folder : Path
+        The folder for the files, created when missing.  The caller deletes
+        it.
+    """
+
+    def __init__(self, folder: Path) -> None:
+        folder.mkdir(parents=True, exist_ok=True)
+        self._folder = folder
+        #: Rows saved under each number and not yet taken.
+        self.rows: dict[int, int] = {}
+
+    def _file(self, number: int) -> Path:
+        return self._folder / f"{number}.pkl"
+
+    def add(self, number: int, frame: pd.DataFrame) -> None:
+        """Append *frame* to the file of *number*."""
+        with self._file(number).open("ab") as out:
+            pickle.dump(frame, out, protocol=pickle.HIGHEST_PROTOCOL)
+        self.rows[number] = self.rows.get(number, 0) + len(frame)
+
+    def split(self, frame: pd.DataFrame, numbers: np.ndarray) -> None:
+        """Append each row of *frame* to the file of its number in *numbers*.
+
+        The rows saved under one number keep their order in *frame*.
+        """
+        order = np.argsort(numbers, kind="stable")
+        starts = np.flatnonzero(np.diff(numbers[order])) + 1
+        for rows in np.split(order, starts):
+            if len(rows):
+                self.add(int(numbers[rows[0]]), frame.iloc[rows])
+
+    def take(self, number: int) -> list[pd.DataFrame]:
+        """Return the frames saved under *number*, in the order added, and delete them."""
+        path = self._file(number)
+        frames: list[pd.DataFrame] = []
+        if not path.exists():
+            return frames
+        with path.open("rb") as saved:
+            while True:
+                try:
+                    frames.append(pickle.load(saved))
+                except EOFError:
+                    break
+        path.unlink()
+        self.rows.pop(number, None)
+        return frames

@@ -49,6 +49,9 @@ Column names are flexible: ``direction`` / ``side`` and ``volume`` / ``size``
 
 from __future__ import annotations
 
+import tempfile
+from collections.abc import Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -59,6 +62,7 @@ from loguru import logger
 from pydantic import Field
 
 from ob_analytics._utils import (
+    FrameFiles,
     attach_ingest_seq,
     checked_labels,
     checked_times,
@@ -67,9 +71,12 @@ from ob_analytics._utils import (
     finite_floats,
     lots_to_size,
     read_csv_file,
+    read_csv_parts,
+    rows_counted_from,
     ticks_to_price,
     to_grid,
     validate_non_empty,
+    window_labels,
 )
 from ob_analytics.capture_files import DEPTH_NAME, TRADES_NAME, record_format
 from ob_analytics.capture_record import CURRENT_FORMAT, FORMAT_TIME_UNITS, read_format
@@ -80,6 +87,7 @@ from ob_analytics.protocols import (
     DepthLoader,
     FeedType,
     Level,
+    LoadedWindow,
     RunContext,
     TradeAttribution,
     TradeReader,
@@ -264,6 +272,9 @@ class DepthCsvLoader:
         self._venue = venue
         self._symbol = symbol
 
+    #: How many rows :meth:`load_windows` reads from the file at a time.
+    read_size: int = 250_000
+
     def load(self, path: str | Path) -> pd.DataFrame:
         """Read *path* and return a canonical depth DataFrame.
 
@@ -288,7 +299,96 @@ class DepthCsvLoader:
         capture_format = read_format(file)
         raw = read_csv_file(file, where)
         validate_non_empty(raw, "DepthCsvLoader.load")
+        depth = self._in_time_order(self._read_rows(raw, file, where), first=0)
+        logger.info(
+            "DepthCsvLoader: {} price-level updates ({} bid, {} ask)",
+            len(depth),
+            int((depth["direction"] == "bid").sum()),
+            int((depth["direction"] == "ask").sum()),
+        )
+        return self._with_identity(depth, capture_format)
 
+    def load_windows(
+        self,
+        path: str | Path,
+        windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+        *,
+        working: Path | None = None,
+    ) -> Iterator[LoadedWindow]:
+        """Yield the depth rows of each time window of *path* in turn.
+
+        The file is read :attr:`read_size` rows at a time.  Each part's rows
+        are sorted into one file per window in *working*, and each window is
+        then read back on its own, so no more than one part or one window is
+        in memory at once.  Each window holds the rows :meth:`load` gives,
+        cut at the windows and in the same order, so the file need not be in
+        time order.
+
+        Parameters
+        ----------
+        path : str or Path
+            The L2 CSV file, or a directory containing ``depth.csv``.
+        windows : list of tuple
+            ``(start, end)`` per window, tz-aware UTC, ``None`` for an open
+            end, covering the whole file: what
+            :func:`~ob_analytics._windows.window_bounds` returns.
+        working : Path, optional
+            An empty folder for the files, which the caller deletes.  By
+            default a temporary folder is made and deleted.
+
+        Yields
+        ------
+        LoadedWindow
+            The window's depth rows.  A price-level row names no order, so no
+            event a trade names is given.
+        """
+        with ExitStack() as stack:
+            if working is None:
+                working = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+            yield from self._load_windows(path, windows, FrameFiles(working))
+
+    def _load_windows(
+        self,
+        path: str | Path,
+        windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+        saved: FrameFiles,
+    ) -> Iterator[LoadedWindow]:
+        """Yield the windows of *path*, sorting its rows through *saved*."""
+        file = self._resolve_depth_file(path)
+        where = f"DepthCsvLoader.load({file})"
+        logger.info("DepthCsvLoader: reading {} one window at a time", file)
+        capture_format = read_format(file)
+        template: pd.DataFrame | None = None
+        for raw in read_csv_parts(file, where, self.read_size):
+            with rows_counted_from(int(raw.index[0]) + 1):
+                depth = self._read_rows(raw, file, where)
+            if template is None:
+                template = depth.iloc[:0]
+            saved.split(depth, window_labels(depth["timestamp"], windows))
+        if template is None:
+            # No rows: read the header alone, for the error a whole read gives.
+            raw = read_csv_file(file, where, nrows=0)
+            validate_non_empty(raw, "DepthCsvLoader.load")
+
+        first = 0
+        for number in range(len(windows)):
+            parts = saved.take(number)
+            depth = pd.concat(parts) if parts else template
+            assert depth is not None
+            depth = self._in_time_order(depth, first=first)
+            first += len(depth)
+            logger.info(
+                "DepthCsvLoader: window {} of {}: {} price-level updates",
+                number + 1,
+                len(windows),
+                len(depth),
+            )
+            yield LoadedWindow(
+                self._with_identity(depth, capture_format), np.empty(0, np.int64)
+            )
+
+    def _read_rows(self, raw: pd.DataFrame, file: Path, where: str) -> pd.DataFrame:
+        """Return the depth rows of *raw*, read from *file*, in file order."""
         ts_col = _first_present(raw.columns, _TIMESTAMP_COLUMNS)
         price_col = _first_present(raw.columns, ("price",))
         side_col = _first_present(raw.columns, _SIDE_COLUMNS)
@@ -307,6 +407,7 @@ class DepthCsvLoader:
                 f"volume ({'/'.join(_VOLUME_COLUMNS)}). "
                 f"Present: {list(raw.columns)}"
             )
+        assert side_col is not None and vol_col is not None
 
         cfg, fmt = self._config, self._settings
         unit = _time_unit(fmt, file)
@@ -339,14 +440,13 @@ class DepthCsvLoader:
         # clock checks leave out the opening book's rows (see ORIGIN_COLUMN).
         origin_col = _first_present(raw.columns, (ORIGIN_COLUMN,))
         if origin_col is not None:
-            depth[ORIGIN_COLUMN] = raw[origin_col].astype("string")
+            depth[ORIGIN_COLUMN] = raw[origin_col].astype("string").array
         # Carry the venue sequence (nullable Int64) when the capture recorded
-        # one and tracking is on; ``raw`` shares ``depth``'s row index, so the
-        # column stays aligned through the filter/sort below.
+        # one and tracking is on.
         if cfg.track_sequence:
             seq_col = _first_present(raw.columns, _SEQUENCE_COLUMNS)
             if seq_col is not None:
-                depth[SEQUENCE_COLUMN] = raw[seq_col].astype("Int64")
+                depth[SEQUENCE_COLUMN] = raw[seq_col].astype("Int64").array
 
         unknown = depth["direction"].isna()
         if unknown.any():
@@ -359,30 +459,32 @@ class DepthCsvLoader:
         # Absolute-size semantics: a negative level size is malformed.
         depth = depth[depth["volume"] >= 0]
         depth["direction"] = depth["direction"].astype(BOOK_SIDE_DTYPE)
-        depth = depth.sort_values("timestamp", kind="stable").reset_index(drop=True)
+        return depth
 
+    def _in_time_order(self, depth: pd.DataFrame, *, first: int) -> pd.DataFrame:
+        """Return *depth* sorted by ``timestamp``, rows of one instant in file order.
+
+        *first* is the number of rows that come before *depth* once the whole
+        file is sorted; the ingest counter goes on from it.
+        """
+        depth = depth.sort_values("timestamp", kind="stable").reset_index(drop=True)
         # Local monotonic ingest counter over the returned (timestamp-sorted)
         # rows — a deterministic order key (opt-in, so the default frame is
         # unchanged).
-        if cfg.track_sequence:
-            depth = attach_ingest_seq(depth)
+        if self._config.track_sequence:
+            depth = attach_ingest_seq(depth, start=first)
+        return depth
 
-        logger.info(
-            "DepthCsvLoader: {} price-level updates ({} bid, {} ask)",
-            len(depth),
-            int((depth["direction"] == "bid").sum()),
-            int((depth["direction"] == "ask").sum()),
-        )
-
+    def _with_identity(self, depth: pd.DataFrame, capture_format: Any) -> pd.DataFrame:
+        """Return *depth* with the run's instrument identity, when it has one."""
         # Optional per-row instrument identity (issue #147): the run's, else
         # what the capture recorded (issue #494).  A generic price-level CSV
         # has no venue of its own, so there is no source-name default.
-        depth = attach_instrument_identity(
+        return attach_instrument_identity(
             depth,
             venue=self._venue or capture_format.venue,
             symbol=self._symbol or capture_format.symbol,
         )
-        return depth
 
     def _resolve_depth_file(self, path: str | Path) -> Path:
         p = Path(path)
