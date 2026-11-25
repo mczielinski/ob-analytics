@@ -145,6 +145,49 @@ def test_without_carry_each_window_starts_from_an_empty_book(synth_session, tmp_
     assert len(windowed["trades"]) == len(single["trades"])
 
 
+def test_order_type_files_give_the_types_a_single_run_gives(
+    synth_session, tmp_path, monkeypatch
+):
+    # Issue #569: a windowed run decides the order types from files, one group
+    # of orders at a time, so the values per order are not held for the whole
+    # input.  Many small groups, and windows that cut across orders, must give
+    # each row the type set_order_types gives over the whole input.
+    from ob_analytics._windows import OrderTypeFiles
+    from ob_analytics.analytics import (
+        _named_event_ids,
+        _OrderFacts,
+        set_order_types,
+    )
+
+    result = _synth_pipeline(synth_session).run(None)
+    events, trades = result.events.drop(columns="type"), result.trades
+    # One order that left with less than it came with and was never changed:
+    # the rule cannot tell its type.
+    odd = events[events["action"] == "created"].iloc[[0]].copy()
+    odd["id"], odd["event_id"] = -1, events["event_id"].max() + 1
+    gone = odd.assign(action="deleted", volume=odd["volume"] - 1)
+    gone["event_id"] += 1
+    events = pd.concat([events, odd, gone], ignore_index=True)
+    with pytest.warns(UserWarning, match="Could not classify") as whole_warnings:
+        expected = set_order_types(events, trades)["type"]
+
+    monkeypatch.setattr(OrderTypeFiles, "rows_per_group", 200)
+    files = OrderTypeFiles(tmp_path)
+    named = _named_event_ids(trades)
+    chunks = [events.iloc[i : i + 1000] for i in range(0, len(events), 1000)]
+    for chunk in chunks:
+        files.add(_OrderFacts.of(chunk, named))
+    with pytest.warns(UserWarning, match="Could not classify") as windowed_warnings:
+        files.decide(trades)
+    got = pd.concat([files.with_types(chunk)["type"] for chunk in chunks])
+
+    assert len(list(tmp_path.glob("types-*.key"))) > 8
+    assert len(windowed_warnings) == 1
+    assert str(windowed_warnings[0].message) == str(whole_warnings[0].message)
+    assert (got == "unknown").sum() == 2
+    pd.testing.assert_series_equal(got, expected)
+
+
 def test_a_window_with_no_rows_is_skipped(synth_session, tmp_path):
     single = _saved_single_run(
         _synth_pipeline(synth_session), None, tmp_path / "single"
@@ -413,6 +456,7 @@ def _dbn_file(duration: float, path):
 def test_a_databento_file_read_a_window_at_a_time_matches_a_single_run(
     tmp_path, monkeypatch
 ):
+    from ob_analytics._windows import OrderTypeFiles
     from ob_analytics.databento import DatabentoLoader, DatabentoSource
 
     path, events = _dbn_file(300.0, tmp_path / "session.dbn")
@@ -420,8 +464,10 @@ def test_a_databento_file_read_a_window_at_a_time_matches_a_single_run(
         Pipeline(source=DatabentoSource()), path, tmp_path / "single"
     )
     # Read the file in parts much smaller than a window, so the windows cut
-    # across parts as well as across orders.
+    # across parts as well as across orders, and decide the order types in
+    # many groups of orders.
     monkeypatch.setattr(DatabentoLoader, "read_size", 997)
+    monkeypatch.setattr(OrderTypeFiles, "rows_per_group", 500)
     cuts = _cuts(events["timestamp"], *(k / 10 for k in range(1, 10)))
 
     out = Pipeline(source=DatabentoSource()).run_windows(path, cuts, tmp_path / "w")
@@ -443,8 +489,8 @@ def _peak_mib(run) -> float:
 def test_a_databento_run_holds_one_window_of_events(tmp_path, monkeypatch):
     # The same window length over a file four times as long: reading a window
     # at a time, the run holds about the same; reading the whole file, it
-    # holds four times as much.  What still grows is a few values per order
-    # and the trades.
+    # holds four times as much.  What still grows is the trade records the
+    # loader keeps and the time of each trade.
     from ob_analytics import PipelineConfig
     from ob_analytics.databento import (
         DatabentoLoader,

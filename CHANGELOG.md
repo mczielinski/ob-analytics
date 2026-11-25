@@ -1241,6 +1241,14 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **A windowed Databento run no longer grows with the input** (#569).
+  `Pipeline.run_windows` used to decide order types over the whole run in
+  memory, so its peak grew by about 0.78 GiB per day of AAPL MBO data. It now
+  writes the values the rule reads to the run's working folder and decides
+  the types one group of orders at a time, and it keeps the trades on disk
+  while the depth stages run. With one-hour windows, ten days of AAPL
+  (38.7M records) peak at 1.43 GiB, and one day at 1.25 GiB. The output is the
+  same, row for row. Loaders other than Databento still read the whole input.
 - **The depth replay is compiled with numba** (#138). `summarize_depth`,
   `DepthSummaryEngine` and `PriceLevelBook` now apply the depth rows in a
   loop that numba compiles to machine code, in place of a dozen small numpy

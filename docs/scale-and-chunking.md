@@ -266,6 +266,33 @@ per row. "Load only" is the loaded events table and nothing else.
 More windows bring the peak down toward the load-only floor at almost no cost in
 time.
 
+### Memory of a long input
+
+Measured on 2026-11-23 on one Linux x86_64 desktop with 15 GiB of memory. The
+input is one day of `XNAS.ITCH` AAPL MBO (2026-11-10, 3.87M records), repeated
+1, 3, 5 and 10 times in one uncompressed DBN file. Each copy is one day later
+than the one before and has new order ids. Each file is run with
+`Pipeline(source=DatabentoSource()).run_windows` and one-hour windows, each
+run in its own process. Peak memory is `ru_maxrss`. "Before" is the code
+before the order types and the trades went to the working folder.
+
+| days | records | windows | peak before | time before | peak after | time after |
+|-----:|--------:|--------:|------------:|------------:|-----------:|-----------:|
+| 1 | 3.9 M | 25 | 1.41 GiB | 30 s | 1.25 GiB | 30 s |
+| 3 | 11.6 M | 73 | 2.92 GiB | 89 s | 1.32 GiB | 88 s |
+| 5 | 19.4 M | 121 | 4.52 GiB | 155 s | 1.34 GiB | 145 s |
+| 10 | 38.7 M | 241 | not run | — | 1.43 GiB | 304 s |
+
+Before, the peak grew by about 0.78 GiB per day of AAPL, so ten days would
+have needed about 8.4 GiB. Most of it was the order types: they were decided
+over the whole run in memory, together with the values per order they are
+read from. Now the peak grows by about 20 MiB per day, and ten days peak 14%
+above one day. What still grows is the trade records the loader keeps and the
+trades, both held while the windows are read; the time of each trade, held
+while the depth stages run; and a little memory that the Parquet writers and
+the memory allocator keep from one window to the next. A single in-memory run
+of one day peaks at about 3.8 GiB.
+
 ### Limits
 
 - **Only the Databento loader reads one window at a time,** and only when the
@@ -273,14 +300,15 @@ time.
   in parts, carries each order's size and price across the cuts, and gives the
   events of one window at a time. The run saves each window's events to a
   working folder inside `output`, decides order types and trade signs over the
-  whole run, and then reads the windows back for the depth stages. The run
-  still holds the trades and a few values per order, so its memory grows a
-  little with the input. On a synthetic file four times as long, with the same
-  window length, it held 1.5 times as much; reading the whole file, it held 3.6
-  times as much. The records must be in receive-time order, which Databento
-  guarantees for one instrument. Every other loader reads the whole input, and
-  the `events` and `trades` tables are held for the whole run. These are the
-  fixed part of the memory above.
+  whole run, and then reads the windows back for the depth stages. The values
+  per order that the order types are read from also go to the working folder,
+  and the types are decided one group of orders at a time. While the depth
+  stages run, the run holds only the time of each trade. So the peak is set by
+  the window length, not by the length of the input; see
+  [Memory of a long input](#memory-of-a-long-input). The records must be in
+  receive-time order, which Databento guarantees for one instrument. Every
+  other loader reads the whole input, and the `events` table is held for the
+  whole run. This is the fixed part of the memory above.
 - **A source's own depth is not used.** LOBSTER's order book file states the
   book after each message of the whole session, so it cannot be cut. A windowed
   LOBSTER run rebuilds its depth from the messages instead.
