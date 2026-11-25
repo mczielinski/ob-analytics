@@ -70,6 +70,7 @@ from ob_analytics.protocols import (
     EventLoader,
     FeedDeclarations,
     Level,
+    LoadedWindow,
     OfflineSource,
     RunContext,
     Source,
@@ -906,14 +907,18 @@ class Pipeline:
 
         Notes
         -----
-        A loader that can read one window at a time (a
-        :class:`~ob_analytics.databento.DatabentoLoader` can) does so when the
-        source built both the loader and the trade reader, which then builds
-        the trades from what the loader kept.  The run then never holds more
-        than one window's events, and goes over the windows twice.
-        The first time it reads each window and saves its events, and the few
-        values per order that the order types are read from, to a working
-        folder inside *output*.  The loader keeps the trade records.  Order
+        A loader that can read one window at a time does so when the source
+        built both the loader and the trade reader.  The loaders of the
+        Databento, Bitstamp and L2 CSV sources can; so can every capture that
+        replays through the Bitstamp or the L2 CSV source.  The run then never
+        holds more than one window's events or depth rows.
+
+        For per-order events the run goes over the windows twice.  The first
+        time it reads each window and saves its events, and the few values per
+        order that the order types are read from, to a working folder inside
+        *output*.  The trade reader then builds the trades from what the
+        loader kept: the Databento loader keeps the trade records, and the
+        Bitstamp loader matches the trades to their orders as it reads.  Order
         types and trade signs are decided over the whole run, as in a single
         run: the order types one group of orders at a time, from the saved
         values.  The second time, the run reads each saved window back and
@@ -923,9 +928,15 @@ class Pipeline:
         order's size and price always carry from one window to the next, as
         they do when the input is read whole.
 
-        Any other loader reads the whole input, and the ``events`` table is
-        held for the whole run.  It is a small part of a run's memory;
-        ``depth_summary`` alone is more than twice its size.
+        A loader that reads a CSV file (Bitstamp, L2) first sorts its rows on
+        disk, in the working folder, so the file need not be in time order.
+        The Bitstamp loader sorts them by order, puts each order's rows in
+        order, and then sorts them by window.  The Databento loader reads the
+        file in order, so its records must be in receive-time order.
+
+        Any other loader, and a loader the caller passes, reads the whole
+        input, and the ``events`` table (or, for a price-level source, the
+        depth rows) is held for the whole run.
 
         A source's own depth is not used.  LOBSTER's order book file states the
         book after each message of the whole session, so it cannot be cut; a
@@ -954,6 +965,10 @@ class Pipeline:
             )
             if level is Level.L3 and windowed:
                 trades, typed_windows, like, counts = _read_windows(
+                    path, loader, trade_reader, windows, working
+                )
+            elif windowed:
+                trades, typed_windows, like, counts = _read_depth_windows(
                     path, loader, trade_reader, windows, working
                 )
             else:
@@ -1330,7 +1345,8 @@ def _read_windows(
     texts: dict[str, Any] = {}
     counts: dict[str, int] = {}
     events = empty_events()
-    for number, (events, named) in enumerate(loader.load_windows(path, windows)):
+    loaded = _loaded_windows(loader, path, windows, working / "loader")
+    for number, (events, named) in enumerate(loaded):
         types.add(_OrderFacts.of(events, named))
         for key, count in loader_counts(events.attrs).items():
             counts[key] = counts.get(key, 0) + count
@@ -1367,6 +1383,54 @@ def _read_windows(
 
     like = pd.DataFrame({c: pd.Series([v], dtype=object) for c, v in texts.items()})
     return trades, typed(), like, counts
+
+
+def _loaded_windows(
+    loader: WindowedLoader,
+    path: Any,
+    windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+    working: Path,
+) -> Iterator[LoadedWindow]:
+    """Return what *loader* yields for *windows*.
+
+    The loader gets *working*, inside the run's own working folder, for the
+    files it may keep while it reads: the Bitstamp and L2 CSV loaders sort
+    their rows there.
+    """
+    return loader.load_windows(path, windows, working=working)
+
+
+def _read_depth_windows(
+    path: Any,
+    loader: WindowedLoader,
+    trade_reader: Any,
+    windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+    working: Path,
+) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame, dict[str, int]]:
+    """Read the price-level depth of *path* one window at a time.
+
+    The trades of a price-level source come from the venue's own prints, not
+    from the depth, so the trade reader reads them first, given an empty
+    events frame, as in a single run.
+
+    Returns
+    -------
+    tuple
+        The trades; each window's depth rows, read as they are needed; an
+        empty events frame, for the output's column types; and no counts, as
+        a single run of a price-level source records none.
+    """
+    logger.info("Pipeline: L2 resolution — reading {} one window at a time", path)
+    logger.info("Pipeline: building trades")
+    trades = trade_reader.load(empty_events(), path)
+    validate_trades_df(trades)  # data contract (schemas.py)
+
+    def checked() -> Iterator[pd.DataFrame]:
+        for depth, _ in _loaded_windows(loader, path, windows, working / "loader"):
+            validate_depth_df(depth)  # data contract (schemas.py)
+            yield depth
+
+    return trades, checked(), empty_events(), {}
 
 
 def _led_by(

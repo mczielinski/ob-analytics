@@ -101,6 +101,8 @@ guidance already on the [scale envelope](architecture.md#scale-envelope) page.
 The 2026-10-03 amendment adds one piece of infrastructure, a windowed run, and
 keeps the rest of this decision. Nothing streams: the loader still reads the
 whole input, and each window is an ordinary in-memory run of the depth stages.
+Since then, the Databento, Bitstamp and L2 CSV loaders have learned to read
+one window at a time; see [Limits](#limits).
 
 ## Recommended workflow
 
@@ -214,7 +216,9 @@ not by the whole input.
 
 One Parquet file per table in `output`: `events`, `trades`, `depth` and
 `depth_summary`. The tests check this against a single run on the bundled
-Bitstamp sample, a synthetic session, a Databento record set and an L2 file. This is the same folder `save_data` writes for a single run,
+Bitstamp sample, a synthetic session, a Databento record set and an L2 file,
+and, for the loaders that read one window at a time, with small parts that cut
+across orders and windows. This is the same folder `save_data` writes for a single run,
 and `load_data` reads it back. Each window is written as soon as it finishes.
 
 The output goes to disk, not into a `PipelineResult`, because the finished
@@ -293,22 +297,75 @@ while the depth stages run; and a little memory that the Parquet writers and
 the memory allocator keep from one window to the next. A single in-memory run
 of one day peaks at about 3.8 GiB.
 
+The Bitstamp and L2 CSV loaders were measured on 2026-11-24 on the same
+desktop. The Bitstamp input is the bundled sample (314k order rows, 30
+minutes) repeated 1, 4 and 8 times in one `orders.csv` and `trades.csv`, each
+copy 30 minutes later than the one before and with new order ids. The L2
+input is the depth and trades of a single run of the sample, written as an L2
+CSV folder (313k depth rows) and repeated the same way. Each file is run
+with `run_windows` and five-minute windows, each run in its own process, and
+peak memory is `ru_maxrss`. "Before" is the code where these loaders read the
+whole input.
+
+| input | copies | windows | peak before | peak after |
+|-------|-------:|--------:|------------:|-----------:|
+| Bitstamp | 1 | 7 | 540 MiB | 404 MiB |
+| Bitstamp | 4 | 25 | 816 MiB | 439 MiB |
+| Bitstamp | 8 | 49 | 1,269 MiB | 477 MiB |
+| L2 | 1 | 7 | 409 MiB | 369 MiB |
+| L2 | 4 | 25 | 516 MiB | 395 MiB |
+| L2 | 8 | 49 | 794 MiB | 401 MiB |
+
+Before, the peak grew by about 100 MiB per copy for Bitstamp and 55 MiB per
+copy for L2. Now it grows by about 10 MiB and 5 MiB per copy: the trades,
+which are still read whole, and the time of each trade. Each run took the
+same time before and after, within a few seconds.
+
 ### Limits
 
-- **Only the Databento loader reads one window at a time,** and only when the
-  source builds it, as `Pipeline(source=DatabentoSource())` does. It reads the file
-  in parts, carries each order's size and price across the cuts, and gives the
-  events of one window at a time. The run saves each window's events to a
-  working folder inside `output`, decides order types and trade signs over the
-  whole run, and then reads the windows back for the depth stages. The values
-  per order that the order types are read from also go to the working folder,
-  and the types are decided one group of orders at a time. While the depth
-  stages run, the run holds only the time of each trade. So the peak is set by
-  the window length, not by the length of the input; see
-  [Memory of a long input](#memory-of-a-long-input). The records must be in
-  receive-time order, which Databento guarantees for one instrument. Every
-  other loader reads the whole input, and the `events` table is held for the
-  whole run. This is the fixed part of the memory above.
+- **Three loaders read one window at a time:** the Databento, Bitstamp and L2
+  CSV loaders, and only when the source builds them, as
+  `Pipeline(source=DatabentoSource())`, `Pipeline()` and
+  `Pipeline.from_source("depth_csv")` do. A capture replays through one of the
+  last two: an L3 capture (Bitstamp, Kraken, the cryptofeed venues) through
+  the Bitstamp format, a ccxt or Kalshi capture through the L2 CSV format.
+  - The Databento loader reads the file in parts, carries each order's size
+    and price across the cuts, and gives the events of one window at a time.
+    The records must be in receive-time order, which Databento guarantees for
+    one instrument.
+  - The Bitstamp loader puts each order's rows in order, and works out its
+    fills, from all of its rows, and an order can last over many windows. So
+    it reads the file in parts and splits the rows by order id into files in
+    the working folder. Then it reads back one group of orders at a time, puts
+    their rows in order, matches the trades in `trades.csv` to them, and
+    splits the rows by window into files. Last, it reads each window back and
+    numbers its events as a whole read does. The file need not be in time
+    order.
+  - The L2 CSV loader reads the file in parts and splits the rows by window
+    into files, then reads each window back and sorts it by time. The file
+    need not be in time order.
+
+  Both CSV loaders check the file one part at a time. A bad row's number in an
+  error counts from the start of its part, and the error says which row of the
+  file that part starts at. A warning that sizes or prices were rounded to the
+  grid comes once for each part that has such values, with that part's count.
+
+  For per-order events the run saves each window's events to a working folder
+  inside `output`, decides order types and trade signs over the whole run, and
+  then reads the windows back for the depth stages. The values per order that
+  the order types are read from also go to the working folder, and the types
+  are decided one group of orders at a time. There a text order id (a UUID,
+  say) stands as a 64-bit hash of its text; for a million orders the chance
+  that two share a hash is less than one in ten million, and the run checks:
+  if two ids do share one, it stops with an error rather than give wrong
+  types. While the depth stages run, the run holds only the time of each
+  trade. So the peak is set by the window length, not by the length of the
+  input; see
+  [Memory of a long input](#memory-of-a-long-input).
+- **The LOBSTER loader reads the whole input,** and so does any loader the
+  caller passes. The `events` table, or for a price-level source the depth
+  rows, is then held for the whole run. A LOBSTER file holds one trading
+  day, so its length is bounded.
 - **A source's own depth is not used.** LOBSTER's order book file states the
   book after each message of the whole session, so it cannot be cut. A windowed
   LOBSTER run rebuilds its depth from the messages instead.
