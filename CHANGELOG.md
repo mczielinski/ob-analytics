@@ -1241,6 +1241,12 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **`LobsterTradeReader` no longer builds dicts over every event** (#203).
+  It looked up each execution's `taker` and `taker_og` in two Python dicts of
+  all event ids, one execution at a time. One pandas index lookup now does the
+  same. The output is the same, value for value. On one desktop the reader
+  fell from 0.79 s to 0.33 s at 5M events, and from 2.82 s to 1.39 s with
+  2.5M executions.
 - **`BitstampTradeReader` no longer builds a dict over every event** (#203).
   It looked up each trade's `maker_og` / `taker_og` in a Python dict of all
   event ids, so its time grew with the events, not the trades. A pandas index
