@@ -559,6 +559,8 @@ class DatabentoLoader:
         self,
         path: Any,
         windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+        *,
+        working: Path | None = None,
     ) -> Iterator[LoadedWindow]:
         """Yield the events of each time window of *path* in turn.
 
@@ -582,6 +584,8 @@ class DatabentoLoader:
             ``(start, end)`` per window, tz-aware UTC, ``None`` for an open
             end, covering the whole file: what
             :func:`~ob_analytics._windows.window_bounds` returns.
+        working : Path, optional
+            Not used: the file is read in order, so no rows go to disk.
 
         Yields
         ------

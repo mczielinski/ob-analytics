@@ -1248,6 +1248,27 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
   desktop the reader fell from 1.78 s to 0.38 s at 5M events (the bundled
   sample tiled 16 times), about 11% of a whole run, and from 0.096 s to
   0.019 s on the sample.
+- **A windowed Databento run no longer grows with the input** (#569).
+  `Pipeline.run_windows` used to decide order types over the whole run in
+  memory, so its peak grew by about 0.78 GiB per day of AAPL MBO data. It now
+  writes the values the rule reads to the run's working folder and decides
+  the types one group of orders at a time, and it keeps the trades on disk
+  while the depth stages run. With one-hour windows, ten days of AAPL
+  (38.7M records) peak at 1.43 GiB, and one day at 1.25 GiB. The output is the
+  same, row for row. Loaders other than Databento still read the whole input.
+- **The Bitstamp and L2 CSV loaders read one window at a time** (#569). In
+  `Pipeline.run_windows`, `BitstampLoader` and `DepthCsvLoader` now read the
+  file in parts and sort its rows on disk, in the run's working folder, so
+  the file need not be in time order. This covers the bundled sample, the
+  Bitstamp, Kraken and cryptofeed captures, and every ccxt or Kalshi capture.
+  On the bundled sample repeated eight times, the peak fell from 1,269 MiB to
+  477 MiB (Bitstamp) and from 794 MiB to 401 MiB (L2). The output is the same,
+  row for row. `WindowedLoader.load_windows` takes a keyword-only `working`
+  folder. In a windowed run, a warning about values rounded to the grid comes
+  once per part read, and a bad row's number counts from the start of its
+  part, with a note giving the file row the part starts at. A run with text
+  order ids stops with an error if two ids share a 64-bit hash. LOBSTER still
+  reads its whole file.
 - **The depth replay is compiled with numba** (#138). `summarize_depth`,
   `DepthSummaryEngine` and `PriceLevelBook` now apply the depth rows in a
   loop that numba compiles to machine code, in place of a dozen small numpy

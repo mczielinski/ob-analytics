@@ -45,6 +45,7 @@ from loguru import logger
 
 from ob_analytics._utils import _UNSET, empty_events, require_per_order_events
 from ob_analytics._windows import (
+    OrderTypeFiles,
     ParquetAppender,
     resting_orders,
     seed_rows,
@@ -52,9 +53,7 @@ from ob_analytics._windows import (
     window_positions,
 )
 from ob_analytics.analytics import (
-    _order_types,
     _OrderFacts,
-    _with_order_types,
     order_aggressiveness,
     set_order_types,
 )
@@ -71,6 +70,7 @@ from ob_analytics.protocols import (
     EventLoader,
     FeedDeclarations,
     Level,
+    LoadedWindow,
     OfflineSource,
     RunContext,
     Source,
@@ -907,23 +907,36 @@ class Pipeline:
 
         Notes
         -----
-        A loader that can read one window at a time (a
-        :class:`~ob_analytics.databento.DatabentoLoader` can) does so when the
-        source built both the loader and the trade reader, which then builds
-        the trades from what the loader kept.  The run then never holds more
-        than one window's events, and goes over the windows twice.
-        The first time it reads each window, keeps a few values per order and
-        the trade records, and saves the window's events to a working folder
-        inside *output*.  Order types and trade signs are decided over the
-        whole run, as in a single run, so the second time it reads each saved
-        window back and runs the depth stages on it.  *carry* does not change
-        how such a loader reads: an order's size and price always carry from
-        one window to the next, as they do when the input is read whole.
+        A loader that can read one window at a time does so when the source
+        built both the loader and the trade reader.  The loaders of the
+        Databento, Bitstamp and L2 CSV sources can; so can every capture that
+        replays through the Bitstamp or the L2 CSV source.  The run then never
+        holds more than one window's events or depth rows.
 
-        Any other loader reads the whole input, and the ``events`` and
-        ``trades`` tables are held for the whole run.  Those two tables are a
-        small part of a run's memory; ``depth_summary`` alone is more than
-        twice the size of ``events``.
+        For per-order events the run goes over the windows twice.  The first
+        time it reads each window and saves its events, and the few values per
+        order that the order types are read from, to a working folder inside
+        *output*.  The trade reader then builds the trades from what the
+        loader kept: the Databento loader keeps the trade records, and the
+        Bitstamp loader matches the trades to their orders as it reads.  Order
+        types and trade signs are decided over the whole run, as in a single
+        run: the order types one group of orders at a time, from the saved
+        values.  The second time, the run reads each saved window back and
+        runs the depth stages on it.  While it does, it holds only the time of
+        each trade; the trades wait in the working folder until the last
+        window is done.  *carry* does not change how such a loader reads: an
+        order's size and price always carry from one window to the next, as
+        they do when the input is read whole.
+
+        A loader that reads a CSV file (Bitstamp, L2) first sorts its rows on
+        disk, in the working folder, so the file need not be in time order.
+        The Bitstamp loader sorts them by order, puts each order's rows in
+        order, and then sorts them by window.  The Databento loader reads the
+        file in order, so its records must be in receive-time order.
+
+        Any other loader, and a loader the caller passes, reads the whole
+        input, and the ``events`` table (or, for a price-level source, the
+        depth rows) is held for the whole run.
 
         A source's own depth is not used.  LOBSTER's order book file states the
         book after each message of the whole session, so it cannot be cut; a
@@ -944,23 +957,38 @@ class Pipeline:
                 and self._trade_reader is None
                 and isinstance(loader, WindowedLoader)
             )
-            if level is Level.L3 and windowed:
-                Path(output).mkdir(parents=True, exist_ok=True)
-                working = stack.enter_context(
+            Path(output).mkdir(parents=True, exist_ok=True)
+            working = Path(
+                stack.enter_context(
                     tempfile.TemporaryDirectory(prefix=".run_windows-", dir=output)
                 )
+            )
+            if level is Level.L3 and windowed:
                 trades, typed_windows, like, counts = _read_windows(
-                    path, loader, trade_reader, windows, Path(working)
+                    path, loader, trade_reader, windows, working
+                )
+            elif windowed:
+                trades, typed_windows, like, counts = _read_depth_windows(
+                    path, loader, trade_reader, windows, working
                 )
             else:
                 trades, typed_windows, like, counts = self._cut_inputs(
                     path, loader, trade_reader, windows, config
                 )
+            # A loader can keep what it read for its trade reader, as the
+            # Databento loader keeps the trade records.  The trades are built,
+            # so let both go before the depth stages.
+            del loader, trade_reader
+            # The trades are signed and written once the last window is done.
+            # Until then only their times are needed, so the rest waits on disk.
+            saved_trades = working / "trades.pkl"
+            trades.to_pickle(saved_trades)
+            del trades
             self._write_windows(
                 windows,
                 typed_windows,
                 like,
-                trades,
+                saved_trades,
                 config,
                 ParquetAppender(output, config, declarations, counts, level=level),
                 carry=carry,
@@ -1000,20 +1028,27 @@ class Pipeline:
         windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
         typed_windows: Iterator[pd.DataFrame],
         like: pd.DataFrame,
-        trades: pd.DataFrame,
+        saved_trades: Path,
         config: PipelineConfig,
         appender: ParquetAppender,
         *,
         carry: bool,
     ) -> None:
-        """Run the depth stages on each window in turn and write the tables."""
+        """Run the depth stages on each window in turn and write the tables.
+
+        *saved_trades* is the run's trades, pickled.  Only their times are
+        held while the windows run; the trades are read back at the end.
+        """
         level = self._source.level
-        trade_windows = window_positions(trades["timestamp"], windows)
-        arrived_into: list[pd.DataFrame] = []
-        # Trades whose own window held no quote before them.
-        no_quote = np.zeros(len(trades), dtype=bool)
+        trades = pd.read_pickle(saved_trades)
+        trade_times = trades[["timestamp"]].copy()
         # The quotes are kept only for trades the venue left unlabelled.
         unlabelled = _unlabelled_trades(trades)
+        del trades
+        trade_windows = window_positions(trade_times["timestamp"], windows)
+        arrived_into: list[pd.DataFrame] = []
+        # Trades whose own window held no quote before them.
+        no_quote = np.zeros(len(trade_times), dtype=bool)
         resting: pd.DataFrame | None = None
         engine = DepthSummaryEngine(config)
         last_quote = last_readable = pd.DataFrame()
@@ -1054,7 +1089,9 @@ class Pipeline:
                         if depth_summary is None
                         else readable_quotes(depth_summary[_ARRIVAL_COLUMNS]),
                     )
-                    _note_quotes(arrived_into, no_quote, trades, at_trades, readable)
+                    _note_quotes(
+                        arrived_into, no_quote, trade_times, at_trades, readable
+                    )
                     last_readable = readable.tail(1)
 
                 if level is Level.L3 and len(window):
@@ -1078,6 +1115,7 @@ class Pipeline:
             standing = (
                 pd.concat(arrived_into, ignore_index=True) if arrived_into else None
             )
+            trades = pd.read_pickle(saved_trades)
             trades = _sign_unlabelled(
                 trades, standing, fallback="tick" if had_quotes else None
             )
@@ -1249,7 +1287,7 @@ def _tick_signs(trades: pd.DataFrame, rows: np.ndarray) -> pd.DataFrame:
 def _note_quotes(
     arrived_into: list[pd.DataFrame],
     no_quote: np.ndarray,
-    trades: pd.DataFrame,
+    trade_times: pd.DataFrame,
     positions: np.ndarray,
     quotes: pd.DataFrame,
 ) -> None:
@@ -1262,15 +1300,16 @@ def _note_quotes(
     Each trade still finds its own row among them, because no readable quote
     falls between a trade and the row it arrived into.  *quotes* are the
     window's readable quotes, led by the last one before the window;
-    *positions* are the window's trades, as positions in *trades*.  The trades
-    with no quote before them in the window are marked in *no_quote*.
+    *positions* are the window's trades, as positions in *trade_times*, the
+    ``timestamp`` of every trade of the run.  The trades with no quote before
+    them in the window are marked in *no_quote*.
     """
     if not len(positions):
         return
     if quotes.empty:
         no_quote[positions] = True
         return
-    standing = quote_before(trades["timestamp"].iloc[positions].to_frame(), quotes)
+    standing = quote_before(trade_times.iloc[positions], quotes)
     no_quote[positions[standing < 0]] = True
     rows = np.unique(standing[standing >= 0])
     if len(rows):
@@ -1286,10 +1325,11 @@ def _read_windows(
 ) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame, dict[str, int]]:
     """Read *path* one window at a time, saving each window's events.
 
-    An order's type is decided over the whole run, so the first pass keeps
-    only what the rule reads (:class:`~ob_analytics.analytics._OrderFacts`),
-    and saves the events to *working*.  The trade reader then builds the
-    whole run's trades from what the loader kept.
+    An order's type is decided over the whole run, so the first pass saves
+    the events to *working*, with what the rule reads of them
+    (:class:`~ob_analytics._windows.OrderTypeFiles`).  The trade reader then
+    builds the whole run's trades from what the loader kept, and the order
+    types are decided from the saved values, a group of orders at a time.
 
     Returns
     -------
@@ -1301,12 +1341,13 @@ def _read_windows(
     """
     logger.info("Pipeline: reading {} one window at a time", path)
     paths: list[Path] = []
-    facts: list[_OrderFacts] = []
+    types = OrderTypeFiles(working)
     texts: dict[str, Any] = {}
     counts: dict[str, int] = {}
     events = empty_events()
-    for number, (events, named) in enumerate(loader.load_windows(path, windows)):
-        facts.append(_OrderFacts.of(events, named))
+    loaded = _loaded_windows(loader, path, windows, working / "loader")
+    for number, (events, named) in enumerate(loaded):
+        types.add(_OrderFacts.of(events, named))
         for key, count in loader_counts(events.attrs).items():
             counts[key] = counts.get(key, 0) + count
         for column in events.columns:
@@ -1317,7 +1358,7 @@ def _read_windows(
                 texts[column] = events[column].loc[first]
         paths.append(working / f"window-{number}.pkl")
         events.to_pickle(paths[-1])
-    if not any(len(part.ids) for part in facts):
+    if types.empty:
         require_per_order_events(events, "set_order_types")
     del events
 
@@ -1326,15 +1367,14 @@ def _read_windows(
     trades = trade_reader.load(empty_events(), path)
     validate_trades_df(trades)  # data contract (schemas.py)
     logger.info("Pipeline: classifying order types")
-    types = _order_types(_OrderFacts.combine(facts), trades)
-    del facts
+    types.decide(trades)
 
     def typed() -> Iterator[pd.DataFrame]:
         # Row labels go on across the windows, as they do in a frame read
         # whole: the next window's seed rows come from this one's.
         start = 0
         for saved in paths:
-            window = _with_order_types(pd.read_pickle(saved), types)
+            window = types.with_types(pd.read_pickle(saved))
             saved.unlink()
             window.index = pd.RangeIndex(start, start + len(window))
             start += len(window)
@@ -1343,6 +1383,54 @@ def _read_windows(
 
     like = pd.DataFrame({c: pd.Series([v], dtype=object) for c, v in texts.items()})
     return trades, typed(), like, counts
+
+
+def _loaded_windows(
+    loader: WindowedLoader,
+    path: Any,
+    windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+    working: Path,
+) -> Iterator[LoadedWindow]:
+    """Return what *loader* yields for *windows*.
+
+    The loader gets *working*, inside the run's own working folder, for the
+    files it may keep while it reads: the Bitstamp and L2 CSV loaders sort
+    their rows there.
+    """
+    return loader.load_windows(path, windows, working=working)
+
+
+def _read_depth_windows(
+    path: Any,
+    loader: WindowedLoader,
+    trade_reader: Any,
+    windows: list[tuple[pd.Timestamp | None, pd.Timestamp | None]],
+    working: Path,
+) -> tuple[pd.DataFrame, Iterator[pd.DataFrame], pd.DataFrame, dict[str, int]]:
+    """Read the price-level depth of *path* one window at a time.
+
+    The trades of a price-level source come from the venue's own prints, not
+    from the depth, so the trade reader reads them first, given an empty
+    events frame, as in a single run.
+
+    Returns
+    -------
+    tuple
+        The trades; each window's depth rows, read as they are needed; an
+        empty events frame, for the output's column types; and no counts, as
+        a single run of a price-level source records none.
+    """
+    logger.info("Pipeline: L2 resolution — reading {} one window at a time", path)
+    logger.info("Pipeline: building trades")
+    trades = trade_reader.load(empty_events(), path)
+    validate_trades_df(trades)  # data contract (schemas.py)
+
+    def checked() -> Iterator[pd.DataFrame]:
+        for depth, _ in _loaded_windows(loader, path, windows, working / "loader"):
+            validate_depth_df(depth)  # data contract (schemas.py)
+            yield depth
+
+    return trades, checked(), empty_events(), {}
 
 
 def _led_by(

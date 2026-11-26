@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import tracemalloc
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -112,6 +113,157 @@ def test_bitstamp_windowed_run_matches_except_aggressiveness(tmp_path, bitstamp_
     )
 
 
+def _refuse_whole_reads(monkeypatch, loader_cls) -> None:
+    """Make *loader_cls* fail if a run reads its whole input."""
+
+    def refuse(self, path):
+        raise AssertionError("read the whole input")
+
+    monkeypatch.setattr(loader_cls, "load", refuse)
+
+
+def _only_the_tables(folder) -> None:
+    """Check that a windowed run left only its four tables in *folder*."""
+    assert sorted(p.name for p in folder.iterdir()) == [
+        f"{name}.parquet" for name in ("depth", "depth_summary", "events", "trades")
+    ]
+
+
+def test_a_bitstamp_capture_read_a_window_at_a_time_matches_a_single_run(
+    tmp_path, bitstamp_head, monkeypatch
+):
+    # Issue #569: the Bitstamp loader reads its file in parts, sorts the rows
+    # by order and then by window on disk, and numbers each window's events
+    # as a whole read does.  Small parts and groups make each step cut across
+    # orders and windows.
+    from ob_analytics.bitstamp import BitstampLoader
+
+    single = _saved_single_run(Pipeline(), bitstamp_head, tmp_path / "single")
+    cuts = _cuts(single["events"]["timestamp"], 0.2, 0.5, 0.8)
+    monkeypatch.setattr(BitstampLoader, "read_size", 997)
+    monkeypatch.setattr(BitstampLoader, "rows_per_group", 3000)
+    _refuse_whole_reads(monkeypatch, BitstampLoader)
+
+    out = Pipeline().run_windows(bitstamp_head, cuts, tmp_path / "w")
+
+    _assert_tables_equal(
+        single, load_data(out), skip_event_columns=("aggressiveness_bps",)
+    )
+    _only_the_tables(out)
+
+
+def test_a_bitstamp_file_out_of_time_order_with_text_ids_matches(
+    tmp_path, bitstamp_head, monkeypatch
+):
+    # The file need not be in time order: the loader sorts its rows on disk.
+    # Text order ids (Independent Reserve and Kraken write UUID-like ids) go
+    # through the order-type files as a hash of their text.
+    from ob_analytics import PipelineConfig
+    from ob_analytics.bitstamp import BitstampLoader
+
+    orders = pd.read_csv(bitstamp_head)
+    trades = pd.read_csv(bitstamp_head.parent / "trades.csv")
+    orders["id"] = "o-" + orders["id"].astype(str)
+    for column in ("buy_order_id", "sell_order_id"):
+        trades[column] = "o-" + trades[column].astype(str)
+    # The second half of the file first.  A full shuffle would also reorder
+    # the rows of one instant, which sends some price levels below zero, and
+    # a windowed run cannot match a single run's clamp at zero.
+    half = len(orders) // 2
+    orders = pd.concat([orders.iloc[half:], orders.iloc[:half]])
+    folder = tmp_path / "text"
+    folder.mkdir()
+    orders.to_csv(folder / "orders.csv", index=False)
+    trades.to_csv(folder / "trades.csv", index=False)
+    path = folder / "orders.csv"
+    config = PipelineConfig(track_sequence=True)
+
+    single = _saved_single_run(Pipeline(config), path, tmp_path / "single")
+    assert pd.api.types.is_string_dtype(single["events"]["id"])
+    cuts = _cuts(single["events"]["timestamp"], 0.3, 0.6)
+    monkeypatch.setattr(BitstampLoader, "read_size", 1500)
+    monkeypatch.setattr(BitstampLoader, "rows_per_group", 4000)
+    _refuse_whole_reads(monkeypatch, BitstampLoader)
+
+    out = Pipeline(config).run_windows(path, cuts, tmp_path / "w")
+
+    _assert_tables_equal(
+        single, load_data(out), skip_event_columns=("aggressiveness_bps",)
+    )
+
+
+def test_two_text_ids_that_share_a_hash_stop_the_run(tmp_path, monkeypatch):
+    # The order-type files key a text id by a 64-bit hash of its text.  Two
+    # ids with one hash would merge two orders' facts and give wrong types,
+    # so the run must stop instead.  Here two orders' ids share a hash, and
+    # each order is in a different window.
+    from ob_analytics import _windows
+    from ob_analytics.analytics import _OrderFacts
+
+    real = _windows._text_hash
+
+    def colliding(texts):
+        hashed = real(texts)
+        hashed[texts == "B-2"] = real(np.array(["A-1"], dtype=object))[0]
+        return hashed
+
+    monkeypatch.setattr(_windows, "_text_hash", colliding)
+    t0 = pd.Timestamp("2026-01-05", tz="UTC")
+    events = pd.DataFrame(
+        {
+            "id": ["A-1", "A-1", "B-2", "B-2"],
+            "timestamp": [t0 + pd.Timedelta(seconds=s) for s in (0, 1, 10, 11)],
+            "price": [100, 100, 101, 101],
+            "volume": [5, 5, 3, 3],
+            "action": ["created", "deleted", "created", "deleted"],
+            "direction": ["bid", "bid", "ask", "ask"],
+            "event_id": [1, 2, 3, 4],
+        }
+    )
+    files = _windows.OrderTypeFiles(tmp_path)
+    for rows in (events.iloc[:2], events.iloc[2:]):
+        files.add(_OrderFacts.of(rows, []))
+    trades = pd.DataFrame({"maker_event_id": [], "taker_event_id": []})
+
+    with pytest.raises(ConfigError, match="share one 64-bit hash"):
+        files.decide(trades)
+
+
+def test_text_ids_with_distinct_hashes_get_their_own_types(tmp_path):
+    from ob_analytics import _windows
+    from ob_analytics.analytics import _OrderFacts, set_order_types
+
+    t0 = pd.Timestamp("2026-01-05", tz="UTC")
+    events = pd.DataFrame(
+        {
+            "id": ["A-1", "A-1", "B-2", "B-2", "C-3"],
+            "timestamp": [t0 + pd.Timedelta(seconds=s) for s in (0, 1, 10, 11, 12)],
+            "price": [100, 100, 101, 101, 99],
+            "volume": [5, 5, 3, 1, 2],
+            "action": ["created", "deleted", "created", "deleted", "created"],
+            "direction": ["bid", "bid", "ask", "ask", "bid"],
+            "event_id": [1, 2, 3, 4, 5],
+        }
+    )
+    trades = pd.DataFrame(
+        {
+            "maker_event_id": pd.array([], "Int64"),
+            "taker_event_id": pd.array([], "Int64"),
+        }
+    )
+    with pytest.warns(UserWarning, match="Could not classify"):
+        expected = set_order_types(events, trades)["type"]
+    files = _windows.OrderTypeFiles(tmp_path)
+    parts = (events.iloc[:2], events.iloc[2:])
+    for rows in parts:
+        files.add(_OrderFacts.of(rows, []))
+    with pytest.warns(UserWarning, match="Could not classify"):
+        files.decide(trades)
+    got = pd.concat([files.with_types(rows)["type"] for rows in parts])
+
+    pd.testing.assert_series_equal(got, expected)
+
+
 def test_without_carry_each_window_starts_from_an_empty_book(synth_session, tmp_path):
     single = _saved_single_run(
         _synth_pipeline(synth_session), None, tmp_path / "single"
@@ -143,6 +295,49 @@ def test_without_carry_each_window_starts_from_an_empty_book(synth_session, tmp_
     # Every row is still written once.
     assert len(windowed["events"]) == len(single["events"])
     assert len(windowed["trades"]) == len(single["trades"])
+
+
+def test_order_type_files_give_the_types_a_single_run_gives(
+    synth_session, tmp_path, monkeypatch
+):
+    # Issue #569: a windowed run decides the order types from files, one group
+    # of orders at a time, so the values per order are not held for the whole
+    # input.  Many small groups, and windows that cut across orders, must give
+    # each row the type set_order_types gives over the whole input.
+    from ob_analytics._windows import OrderTypeFiles
+    from ob_analytics.analytics import (
+        _named_event_ids,
+        _OrderFacts,
+        set_order_types,
+    )
+
+    result = _synth_pipeline(synth_session).run(None)
+    events, trades = result.events.drop(columns="type"), result.trades
+    # One order that left with less than it came with and was never changed:
+    # the rule cannot tell its type.
+    odd = events[events["action"] == "created"].iloc[[0]].copy()
+    odd["id"], odd["event_id"] = -1, events["event_id"].max() + 1
+    gone = odd.assign(action="deleted", volume=odd["volume"] - 1)
+    gone["event_id"] += 1
+    events = pd.concat([events, odd, gone], ignore_index=True)
+    with pytest.warns(UserWarning, match="Could not classify") as whole_warnings:
+        expected = set_order_types(events, trades)["type"]
+
+    monkeypatch.setattr(OrderTypeFiles, "rows_per_group", 200)
+    files = OrderTypeFiles(tmp_path)
+    named = _named_event_ids(trades)
+    chunks = [events.iloc[i : i + 1000] for i in range(0, len(events), 1000)]
+    for chunk in chunks:
+        files.add(_OrderFacts.of(chunk, named))
+    with pytest.warns(UserWarning, match="Could not classify") as windowed_warnings:
+        files.decide(trades)
+    got = pd.concat([files.with_types(chunk)["type"] for chunk in chunks])
+
+    assert len(list(tmp_path.glob("types-*.key"))) > 8
+    assert len(windowed_warnings) == 1
+    assert str(windowed_warnings[0].message) == str(whole_warnings[0].message)
+    assert (got == "unknown").sum() == 2
+    pd.testing.assert_series_equal(got, expected)
 
 
 def test_a_window_with_no_rows_is_skipped(synth_session, tmp_path):
@@ -186,6 +381,39 @@ def test_l2_windowed_run_matches_a_single_run(toy_l2_dir, tmp_path):
     )
 
     _assert_tables_equal(single, load_data(out))
+
+
+def test_an_l2_file_read_a_window_at_a_time_matches_a_single_run(
+    tmp_path, bitstamp_head, monkeypatch
+):
+    # Issue #569: the L2 CSV loader reads its file in parts and sorts the rows
+    # into one file per window, so a run holds one window of depth rows.  The
+    # depth of a Bitstamp run makes a long L2 file; its rows are shuffled, so
+    # the parts are not in time order, and the trades carry no side.
+    from ob_analytics import PipelineConfig
+    from ob_analytics.depth_csv import DepthCsvLoader, DepthCsvSource
+
+    l3 = Pipeline().run(bitstamp_head)
+    trades = l3.trades.assign(direction=pd.Series(pd.NA, index=l3.trades.index))
+    folder = tmp_path / "l2"
+    DepthCsvWriter().write({"depth": l3.depth, "trades": trades}, folder)
+    rows = pd.read_csv(folder / "depth.csv")
+    rows.sample(frac=1, random_state=3).to_csv(folder / "depth.csv", index=False)
+    config = PipelineConfig(track_sequence=True)
+
+    single = _saved_single_run(
+        Pipeline(config, source=DepthCsvSource()), folder, tmp_path / "single"
+    )
+    cuts = _cuts(single["depth"]["timestamp"], 0.25, 0.5, 0.75)
+    monkeypatch.setattr(DepthCsvLoader, "read_size", 499)
+    _refuse_whole_reads(monkeypatch, DepthCsvLoader)
+
+    out = Pipeline(config, source=DepthCsvSource()).run_windows(
+        folder, cuts, tmp_path / "w"
+    )
+
+    _assert_tables_equal(single, load_data(out))
+    _only_the_tables(out)
 
 
 def test_l2_trades_at_a_book_instant_read_the_quote_before_it(tmp_path):
@@ -333,7 +561,7 @@ def test_a_loader_the_caller_passes_reads_the_whole_input(tmp_path, monkeypatch)
     from ob_analytics.databento import DatabentoLoader, DatabentoSource
     from tests.test_databento import LIFECYCLE, T0, mbo_frame
 
-    def refuse(self, path, windows):
+    def refuse(self, path, windows, *, working=None):
         raise AssertionError("read one window at a time")
 
     monkeypatch.setattr(DatabentoLoader, "load_windows", refuse)
@@ -413,6 +641,7 @@ def _dbn_file(duration: float, path):
 def test_a_databento_file_read_a_window_at_a_time_matches_a_single_run(
     tmp_path, monkeypatch
 ):
+    from ob_analytics._windows import OrderTypeFiles
     from ob_analytics.databento import DatabentoLoader, DatabentoSource
 
     path, events = _dbn_file(300.0, tmp_path / "session.dbn")
@@ -420,8 +649,10 @@ def test_a_databento_file_read_a_window_at_a_time_matches_a_single_run(
         Pipeline(source=DatabentoSource()), path, tmp_path / "single"
     )
     # Read the file in parts much smaller than a window, so the windows cut
-    # across parts as well as across orders.
+    # across parts as well as across orders, and decide the order types in
+    # many groups of orders.
     monkeypatch.setattr(DatabentoLoader, "read_size", 997)
+    monkeypatch.setattr(OrderTypeFiles, "rows_per_group", 500)
     cuts = _cuts(events["timestamp"], *(k / 10 for k in range(1, 10)))
 
     out = Pipeline(source=DatabentoSource()).run_windows(path, cuts, tmp_path / "w")
@@ -443,8 +674,8 @@ def _peak_mib(run) -> float:
 def test_a_databento_run_holds_one_window_of_events(tmp_path, monkeypatch):
     # The same window length over a file four times as long: reading a window
     # at a time, the run holds about the same; reading the whole file, it
-    # holds four times as much.  What still grows is a few values per order
-    # and the trades.
+    # holds four times as much.  What still grows is the trade records the
+    # loader keeps and the time of each trade.
     from ob_analytics import PipelineConfig
     from ob_analytics.databento import (
         DatabentoLoader,
