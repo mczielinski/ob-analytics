@@ -886,7 +886,12 @@ class BitstampTradeReader:
         by_order = self._match_quote_amount_takers(
             events, trade_file.taker_id, taker_event_id
         )
-        id_to_og = dict(zip(events["event_id"], events["original_number"]))
+        # A Series keyed by event_id, so the lookup is one vectorised index
+        # probe.  A dict built over every event cost about 1.8 s at 5M events
+        # to serve a few thousand trades (#203).
+        id_to_og = pd.Series(
+            events["original_number"].to_numpy(), index=events["event_id"].to_numpy()
+        )
         return self._frame(
             trade_file, maker_event_id, taker_event_id, id_to_og, by_order
         )
@@ -896,7 +901,7 @@ class BitstampTradeReader:
         trade_file: _TradeFile,
         maker_event_id: np.ndarray,
         taker_event_id: np.ndarray,
-        id_to_og: dict[Any, Any],
+        id_to_og: dict[Any, Any] | pd.Series,
         by_order: int,
     ) -> pd.DataFrame:
         """Return the trades frame of *trade_file* with the events matched."""

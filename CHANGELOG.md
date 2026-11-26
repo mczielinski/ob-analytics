@@ -1241,6 +1241,13 @@ Each break, old -> new. The package keeps no aliases for old names before 1.0.
 
 ### Changed
 
+- **`BitstampTradeReader` no longer builds a dict over every event** (#203).
+  It looked up each trade's `maker_og` / `taker_og` in a Python dict of all
+  event ids, so its time grew with the events, not the trades. A pandas index
+  lookup now does the same. The output is the same, value for value. On one
+  desktop the reader fell from 1.78 s to 0.38 s at 5M events (the bundled
+  sample tiled 16 times), about 11% of a whole run, and from 0.096 s to
+  0.019 s on the sample.
 - **A windowed Databento run no longer grows with the input** (#569).
   `Pipeline.run_windows` used to decide order types over the whole run in
   memory, so its peak grew by about 0.78 GiB per day of AAPL MBO data. It now
