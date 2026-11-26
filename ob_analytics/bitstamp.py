@@ -450,7 +450,12 @@ class BitstampTradeReader:
         taker_event_id = self._resolve_event_ids(taker_id, amounts, ev_lookup)
         by_order = self._match_quote_amount_takers(events, taker_id, taker_event_id)
 
-        id_to_og = dict(zip(events["event_id"], events["original_number"]))
+        # A Series keyed by event_id, so the lookup is one vectorised index
+        # probe.  A dict built over every event cost about 1.8 s at 5M events
+        # to serve a few thousand trades (#203).
+        id_to_og = pd.Series(
+            events["original_number"].to_numpy(), index=events["event_id"].to_numpy()
+        )
         maker_og = pd.Series(maker_event_id).map(id_to_og)
         taker_og = pd.Series(taker_event_id).map(id_to_og)
 

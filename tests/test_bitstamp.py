@@ -142,6 +142,18 @@ class TestBitstampTradeReader:
         ):
             assert col in trades.columns
 
+    def test_og_columns_name_the_row_of_the_matched_event(
+        self, sample_events, bitstamp_sample_dir
+    ):
+        trades = BitstampTradeReader().load(
+            sample_events, bitstamp_sample_dir / "orders.csv.gz"
+        )
+        row_of = sample_events.set_index("event_id")["original_number"]
+
+        for side in ("maker", "taker"):
+            expected = trades[f"{side}_event_id"].map(row_of)
+            assert (trades[f"{side}_og"] == expected).all()
+
     def test_a_missing_companion_is_refused(self, tmp_path, tiny_bitstamp_orders_csv):
         orders = tmp_path / "orders.csv"
         orders.write_bytes(tiny_bitstamp_orders_csv.read_bytes())
@@ -720,6 +732,7 @@ class TestQuoteAmountTaker:
         trades = BitstampTradeReader().load(events, orders)
 
         assert pd.isna(trades["taker_event_id"].iloc[0])
+        assert pd.isna(trades["taker_og"].iloc[0])
 
     def test_the_bundled_sample_resolves_every_taker(
         self, sample_events, bitstamp_sample_dir
