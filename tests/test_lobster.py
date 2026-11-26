@@ -297,6 +297,36 @@ class TestFindTakers:
         assert pd.isna(result[1])
 
 
+class TestTakerColumns:
+    """``taker`` / ``taker_og`` come from the row ``taker_event_id`` names."""
+
+    def test_a_found_taker_names_its_row_and_a_missing_one_stays_empty(self):
+        # event_id, id and original_number all differ, so a lookup through
+        # the wrong column cannot pass by accident.
+        base = {"volume": 1, "fill": 1}
+        events = _events(
+            [
+                {**base, "event_id": 1, "id": 501, "original_number": 11,
+                 "timestamp": "2024-01-01 09:30:00.000+00:00", "price": 100,
+                 "direction": "ask", "raw_event_type": 1},
+                {**base, "event_id": 2, "id": 502, "original_number": 13,
+                 "timestamp": "2024-01-01 09:30:00.001+00:00", "price": 100,
+                 "direction": "bid", "raw_event_type": 4},
+                {**base, "event_id": 3, "id": 503, "original_number": 14,
+                 "timestamp": "2024-01-01 09:30:00.002+00:00", "price": 50,
+                 "direction": "bid", "raw_event_type": 4},
+            ]
+        )  # fmt: skip
+
+        trades = LobsterTradeReader().load(events, None)
+
+        assert list(trades["taker_event_id"].astype("object")) == [1, pd.NA]
+        assert trades["taker"].iloc[0] == 501
+        assert trades["taker_og"].iloc[0] == 11
+        assert pd.isna(trades["taker"].iloc[1])
+        assert pd.isna(trades["taker_og"].iloc[1])
+
+
 # ---------------------------------------------------------------------------
 # LobsterWriter: the orderbook file
 # ---------------------------------------------------------------------------

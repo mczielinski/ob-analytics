@@ -465,16 +465,18 @@ class LobsterTradeReader:
 
         # Best-effort taker identification
         taker_event_id = self._find_takers(events, execs)
-        id_to_id = dict(zip(events["event_id"], events["id"]))
-        id_to_og = dict(zip(events["event_id"], events["original_number"]))
-        taker_id = pd.array(
-            [id_to_id.get(t) if pd.notna(t) else pd.NA for t in taker_event_id],
-            dtype="object",
-        )
-        taker_og = pd.array(
-            [id_to_og.get(t) if pd.notna(t) else pd.NA for t in taker_event_id],
-            dtype="object",
-        )
+        # Each taker's row in *events*, by one index probe: dicts over every
+        # event, read once per execution, grew with the events (#203).
+        rows = pd.Index(events["event_id"]).get_indexer(pd.Index(taker_event_id))
+        missing = rows < 0
+
+        def of_taker(column: str) -> pd.api.extensions.ExtensionArray:
+            values = events[column].to_numpy(dtype=object)[rows]
+            values[missing] = pd.NA
+            return pd.arrays.NumpyExtensionArray(values)
+
+        taker_id = of_taker("id")
+        taker_og = of_taker("original_number")
 
         trades = pd.DataFrame(
             {
