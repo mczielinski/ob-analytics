@@ -5,97 +5,97 @@
       "run": "sample",
       "stage": "load",
       "events": 314057,
-      "seconds": 0.47383372800000245,
-      "peak_rss_mib": 491.140625,
-      "reference_seconds": 0.09775883099999305
+      "seconds": 0.29629758299998343,
+      "peak_rss_mib": 417.1796875,
+      "reference_seconds": 0.09667704700001423
     },
     {
       "run": "sample",
       "stage": "set_order_types",
       "events": 314057,
-      "seconds": 0.15755385299999602,
-      "peak_rss_mib": 545.62890625,
-      "reference_seconds": 0.09775883099999305
+      "seconds": 0.1389898429999903,
+      "peak_rss_mib": 500.734375,
+      "reference_seconds": 0.09667704700001423
     },
     {
       "run": "sample",
       "stage": "price_level_volume",
       "events": 314057,
-      "seconds": 0.17158797599999787,
-      "peak_rss_mib": 556.1015625,
-      "reference_seconds": 0.09775883099999305
+      "seconds": 0.16002821800000788,
+      "peak_rss_mib": 506.08984375,
+      "reference_seconds": 0.09667704700001423
     },
     {
       "run": "sample",
       "stage": "depth_metrics",
       "events": 314057,
-      "seconds": 0.3200264070000003,
-      "peak_rss_mib": 695.265625,
-      "reference_seconds": 0.09775883099999305
+      "seconds": 0.3331240159999993,
+      "peak_rss_mib": 644.49609375,
+      "reference_seconds": 0.09667704700001423
     },
     {
       "run": "sample",
       "stage": "order_aggressiveness",
       "events": 314057,
-      "seconds": 0.11093221000000142,
-      "peak_rss_mib": 695.265625,
-      "reference_seconds": 0.09775883099999305
+      "seconds": 0.10722768399999438,
+      "peak_rss_mib": 644.49609375,
+      "reference_seconds": 0.09667704700001423
     },
     {
       "run": "sample",
       "stage": "queue_positions",
       "events": 314057,
-      "seconds": 0.14409885700000302,
-      "peak_rss_mib": 695.265625,
-      "reference_seconds": 0.09775883099999305
+      "seconds": 0.133357932999985,
+      "peak_rss_mib": 644.49609375,
+      "reference_seconds": 0.09667704700001423
     },
     {
       "run": "synth",
       "stage": "load",
       "events": 316634,
-      "seconds": 1.549528769999995,
-      "peak_rss_mib": 543.41796875,
-      "reference_seconds": 0.09841247800000019
+      "seconds": 1.2644157560000053,
+      "peak_rss_mib": 497.6953125,
+      "reference_seconds": 0.09444098000000167
     },
     {
       "run": "synth",
       "stage": "set_order_types",
       "events": 316634,
-      "seconds": 0.13937578300000553,
-      "peak_rss_mib": 543.41796875,
-      "reference_seconds": 0.09841247800000019
+      "seconds": 0.12587241200000676,
+      "peak_rss_mib": 497.6953125,
+      "reference_seconds": 0.09444098000000167
     },
     {
       "run": "synth",
       "stage": "price_level_volume",
       "events": 316634,
-      "seconds": 0.18498578199999827,
-      "peak_rss_mib": 543.41796875,
-      "reference_seconds": 0.09841247800000019
+      "seconds": 0.1650099109999985,
+      "peak_rss_mib": 497.6953125,
+      "reference_seconds": 0.09444098000000167
     },
     {
       "run": "synth",
       "stage": "depth_metrics",
       "events": 316634,
-      "seconds": 0.13723866899999848,
-      "peak_rss_mib": 544.78515625,
-      "reference_seconds": 0.09841247800000019
+      "seconds": 0.16100689000001012,
+      "peak_rss_mib": 502.44140625,
+      "reference_seconds": 0.09444098000000167
     },
     {
       "run": "synth",
       "stage": "order_aggressiveness",
       "events": 316634,
-      "seconds": 0.09888313900000867,
-      "peak_rss_mib": 544.78515625,
-      "reference_seconds": 0.09841247800000019
+      "seconds": 0.0932943180000052,
+      "peak_rss_mib": 502.44140625,
+      "reference_seconds": 0.09444098000000167
     },
     {
       "run": "synth",
       "stage": "queue_positions",
       "events": 316634,
-      "seconds": 0.11478123700000253,
-      "peak_rss_mib": 544.78515625,
-      "reference_seconds": 0.09841247800000019
+      "seconds": 0.11734513700000093,
+      "peak_rss_mib": 502.44140625,
+      "reference_seconds": 0.09444098000000167
     }
   ]
 }
